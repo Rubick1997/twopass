@@ -1,0 +1,47 @@
+{
+  "name": "twopass",
+  "version": "0.0.1",
+  "description": "Batch LLM work with a decision model checking every row: accept, re-run, or hand to a human.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Rustam Kolumbayev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Rubick1997/twopass.git"
+  },
+  "homepage": "https://github.com/Rubick1997/twopass#readme",
+  "keywords": [
+    "llm",
+    "batch",
+    "openrouter",
+    "decision-model",
+    "calibration",
+    "cli"
+  ],
+  "bin": {
+    "twopass": "dist/src/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "twopass": "node src/cli.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "fetch:banking77": "node scripts/fetch-banking77.ts"
+  },
+  "dependencies": {
+    "csv-parse": "^7.0.3",
+    "csv-stringify": "^6.9.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "22",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}

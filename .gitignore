@@ -1,0 +1,21 @@
+# dependencies and build output
+node_modules/
+dist/
+*.tsbuildinfo
+
+# local data and run state (can contain API outputs; never commit)
+data/
+runs/*
+!runs/published/
+
+# local working notes: brief, plan, dev-run findings, API verification
+docs/
+/manifest.json
+
+# secrets and editor/OS files
+.env
+.env.*
+.DS_Store
+.vscode/
+.idea/
+.claude/
