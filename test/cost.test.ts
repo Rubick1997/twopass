@@ -50,6 +50,12 @@ describe('pricing', () => {
     expect(tierFor(haiku, 100_000).inputPerToken).toBe(5e-7);
   });
 
+  it('accepts and ignores override shapes it does not use, such as time-of-day prices', () => {
+    const timed = { id: 'x/timed', pricing: { prompt: '0.0000001', completion: '0.0000004', overrides: [{ utc_start: 1600, utc_end: 0, prompt: '0.00000008', completion: '0.0000003' }] } };
+    const p = pricesFrom([timed as unknown as OpenRouterModel], ['x/timed'])['x/timed']!;
+    expect(p).toEqual({ inputPerToken: 1e-7, outputPerToken: 4e-7 });
+  });
+
   it('matches what OpenRouter billed for a cache write and a cache hit', () => {
     for (const call of [cacheWriteCall, cacheHitCall]) {
       expect(priceUsage(bucketsFromOpenRouter(call.usage), haiku, '1h')).toBeCloseTo(call.billed, 10);

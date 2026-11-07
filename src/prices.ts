@@ -14,7 +14,9 @@ const modelsSchema = z.looseObject({
         input_cache_read: z.string().optional(),
         input_cache_write: z.string().optional(),
         input_cache_write_1h: z.string().optional(),
-        overrides: z.array(z.looseObject({ min_prompt_tokens: z.number() })).optional(),
+        // Several shapes exist: prompt-length tiers (min_prompt_tokens) and time-of-day prices (utc_start,
+        // utc_end, utc_days). Anything not understood must not break the model list.
+        overrides: z.array(z.looseObject({})).optional(),
       }),
     }),
   ),
@@ -49,7 +51,12 @@ export function pricesFrom(models: OpenRouterModel[], ids: string[]): Prices {
     const m = models.find((x) => x.id === id);
     if (!m) throw new Error(`Model ${id} is not listed on OpenRouter. Batch models need the ":batch" suffix.`);
     const p = m.pricing;
-    const overrides = (p.overrides ?? []).map((o) => ({ minPromptTokens: o.min_prompt_tokens, ...tokenPrices({ ...p, ...o }) }));
+    // Only prompt-length tiers are used. Time-of-day overrides are ignored: none of the models TwoPass runs has them.
+    const overrides = (p.overrides ?? []).flatMap((o) =>
+      typeof o.min_prompt_tokens === 'number' && !Object.keys(o).some((k) => k.startsWith('utc_'))
+        ? [{ minPromptTokens: o.min_prompt_tokens, ...tokenPrices({ ...p, ...o }) }]
+        : [],
+    );
     prices[id] = { ...tokenPrices(p), ...(overrides.length ? { overrides } : {}) };
   }
   return prices;
