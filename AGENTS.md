@@ -40,11 +40,19 @@ Run from the repo root with `node src/cli.ts <command>` (or `pnpm twopass <comma
 
 | Command | What it does | Costs money |
 |---|---|---|
+| `check <csv> --task <file> [--label col] [--delimiter auto\|,\|;\|tab\|pipe] [--out dir] [--json]` | Validate the CSV against the task; write `normalized.csv` + `check-report.json` (default `runs/checks/…`). Exit 1 on errors | no (only GET `/models`) |
 | `run <csv> --task <file> [--sample N] [--label col] [--max-usd N]` | New run in `runs/<runId>/` | yes |
 | `resume <runId>` | Continue a stopped run; nothing is repeated or paid twice | yes |
 | `report <runId>` | Summary line from the ledger | no |
 | `calibrate <runId> --models jev,clef,luna` | Fit thresholds on a labeled `--collect` run | yes |
 | `bench banking77 --max-usd N` | Full benchmark: downloads data, calibrates on train, runs configs on test | yes (~$20–30 full) |
+
+**Runs normalize their input.** `run` and `bench` call `checkCsv` (`src/check.ts`) first and refuse to start on any
+error. Everything except the context-length check runs before any network call; that check needs one GET `/models`,
+which is reused for prices. A started run keeps `normalized.csv` and `check-report.json`, builds `rows.jsonl` from
+the normalized rows, and records both file hashes under `input` in `manifest.json`. `resume` reads `rows.jsonl` only.
+Row numbers in check messages are 1-based data rows (header excluded). Keep `check` model-free and never print matched
+personal data, only row numbers.
 
 Decision-model aliases: `jev` = `typesafe/jev-1.14`, `clef` = `cloudflare/clef`, `luna` = `openai/gpt-6-luna-decisions`.
 
@@ -57,6 +65,7 @@ If the OpenRouter balance is low, add `--max-batch-rows 500` (see "Provider rule
 ```
 src/
   cli.ts            argument parsing only
+  check.ts          CSV preflight: decode, detect delimiter, normalize, validate against the task (no models)
   runner.ts         start / execute / calibrate a run (shared by cli and bench)
   pipeline.ts       the rounds; normal | collect | baseline modes; computeOutcomes (pure)
   ledger.ts         append-only JSONL event log + replay() → RunState
@@ -103,7 +112,8 @@ runs/  data/        local only, gitignored
 ## Adding a task
 
 Copy `tasks/banking77.task.ts`. Define `state`, the `writer` prompt with `{{column}}` placeholders, `outputSchema`
-(zod), the `verify` instructions, and the models. Add `triage` only for closed-choice tasks. Writer and escalation
+(zod), the `verify` instructions, and the models. List columns that only `state` or `verify.state` read in
+`inputColumns`, so `check` can require them. Add `triage` only for closed-choice tasks. Writer and escalation
 model IDs must end in `:batch`.
 
 ## Before committing

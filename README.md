@@ -57,13 +57,40 @@ node src/cli.ts resume <runId>       # after a crash, a cost-cap stop, or Ctrl-C
 node src/cli.ts report <runId>
 ```
 
+### Preparing your CSV
+
+Check a CSV before spending anything. It calls no model (only OpenRouter's public model list, for context lengths):
+
+```bash
+node src/cli.ts check my.csv --task tasks/my.task.ts --label expected   # --label is optional
+```
+
+`run` and `bench` do the same check automatically and refuse to start on errors, before any network call.
+
+**What the CSV needs:** a header row with unique, non-empty column names; every column the task reads (its
+`{{placeholders}}`, `inputColumns` and `idColumn`); unique, non-empty ids; the same number of cells in every row; and
+at least one data row.
+
+**What `check` fixes, logging every change** (the input file is never modified; a normalized copy is written):
+Windows-1252 → UTF-8, a byte-order mark, `,` `;` tab or `|` delimiters (auto-detected), CRLF line endings, Unicode
+NFC, zero-width and control characters, surrounding whitespace, empty rows, and labels that differ only in case,
+spaces or hyphens (`Card Arrival` → `card_arrival`) when exactly one allowed label matches.
+
+**What it refuses:** undecodable or empty files, ragged rows, missing columns (with "did you mean" suggestions),
+empty or duplicate ids, labels outside the task's output schema, and rows likely too long for a model's context.
+
+**What it warns about** (the run proceeds): empty values, duplicate inputs, possible personal data (emails, phone
+numbers, Luhn-valid card numbers, mod-97-valid IBANs; reported by row number only, never printed), too few labeled
+rows for calibration, and cells a spreadsheet could run as formulas. TwoPass escapes those in its own output CSVs.
+
 Each run writes `runs/<runId>/`:
 
 | File | What it holds |
 |---|---|
 | `enriched.csv` | Your columns plus `answer, confidence, verdict, model, round, cost_usd, status` |
 | `review.csv` | Only the flagged rows |
-| `manifest.json` | Pinned model IDs, thresholds, prices, the task file's hash |
+| `manifest.json` | Pinned model IDs, thresholds, prices, the task file's and input's hashes |
+| `normalized.csv`, `check-report.json` | The input as the run used it, and every change and warning from `check` |
 | `ledger.jsonl` | Every call and result, in order |
 
 Coding agents: see [AGENTS.md](AGENTS.md).
