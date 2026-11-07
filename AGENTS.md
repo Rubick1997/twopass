@@ -28,7 +28,7 @@ Requirements: **Node ≥ 22.18** (runs `.ts` files directly through type strippi
 pnpm install
 pnpm test            # unit tests, all HTTP mocked, no key needed
 pnpm typecheck
-pnpm build           # optional: compiles to dist/ (the npm bin)
+pnpm build           # compiles to dist/ (the npm bin) and builds the UI into dist/ui
 export OPENROUTER_API_KEY=sk-or-...   # only for commands that call models
 ```
 
@@ -46,6 +46,7 @@ Run from the repo root with `node src/cli.ts <command>` (or `pnpm twopass <comma
 | `report <runId>` | Summary line from the ledger | no |
 | `calibrate <runId> --models jev,clef,luna` | Fit thresholds on a labeled `--collect` run | yes |
 | `bench banking77 --max-usd N` | Full benchmark: downloads data, calibrates on train, runs configs on test | yes (~$20–30 full) |
+| `ui [--runs dir] [--port 4777] [--no-open]` | Local web app (127.0.0.1 only) with every run and bench, live. Needs `pnpm build` first | no (only GET `/credits` for the balance, if a key is set) |
 
 **Runs normalize their input.** `run` and `bench` call `checkCsv` (`src/check.ts`) first and refuse to start on any
 error. Everything except the context-length check runs before any network call; that check needs one GET `/models`,
@@ -59,6 +60,29 @@ Decision-model aliases: `jev` = `typesafe/jev-1.14`, `clef` = `cloudflare/clef`,
 **Always pass `--max-usd`** on anything that calls models, and confirm the amount with the user before running a
 bench. For a cheap end-to-end check, use `bench banking77 --calibration-size 60 --test-size 40 --max-usd 1`.
 If the OpenRouter balance is low, add `--max-batch-rows 500` (see "Provider rules" below).
+
+## Local UI (`twopass ui`)
+
+```bash
+pnpm build                                # TS + the app (Vite + React) into dist/ui
+node src/cli.ts ui                        # http://127.0.0.1:4777, opens the browser
+node scripts/fake-live-run.ts             # a fake run that updates for ~4 min; no key, no cost
+pnpm dev:ui                               # Vite dev server; proxies /api to a running `ui --no-open` on 4777
+```
+
+- `src/ui/api.ts` holds all the logic as pure functions (runs folder in, plain objects out); `server.ts` only routes,
+  sets headers and serves `dist/ui`. Response types live once in `src/ui/api-types.ts`, imported type-only by the app.
+- The server is **read-only**, binds to `127.0.0.1`, rejects any `Host` other than `127.0.0.1:<port>` /
+  `localhost:<port>`, and validates IDs against `^[A-Za-z0-9_.-]+$` plus a resolved-path check. The OpenRouter key stays
+  in the server process and is never sent to the browser or logged (a test searches every response for it).
+- No model calls in the UI or server. The only outgoing request is `GET /api/v1/credits`, cached 30 s.
+- React and Vite are devDependencies: users of the CLI install no frontend runtime.
+- Spend by stage comes from `spendByStage` in `src/stats.ts`, shared with the bench report. Don't compute it anywhere else.
+
+**The run lock.** `executeRun` writes `runs/<id>/run.lock` (`{ pid, startedAt, heartbeatAt }`), refreshes the heartbeat
+every 15 s, and removes it on normal exit, on errors and on SIGINT. A run counts as *running* only if the heartbeat is
+under 60 s old and the pid is alive. The lock is advisory: nothing refuses to start because of it, so a crash (which
+leaves a stale file) never blocks `resume`. Keep it that way.
 
 ## Layout
 
@@ -75,9 +99,15 @@ src/
   calibrate.ts      threshold fitting, isotonic calibration, ECE/Brier/AUC (pure)
   score.ts          ledger → (score, p, correct) points per model and stage
   bench.ts          benchmark orchestration + report
+  stats.ts          spend by stage, medians (shared by the bench report and the UI)
+  lock.ts           run.lock heartbeat (advisory; tells the UI a run is alive)
+  ui/               `twopass ui`: api.ts (pure), server.ts (node:http), api-types.ts, models.ts
   datasets/         Banking77 download
 tasks/              task files (banking77.task.ts)
+ui/                 the browser app (Vite + React, own tsconfig), built to dist/ui
+scripts/            dataset fetch, contamination check, fake-live-run.ts (UI demo, no cost)
 test/               vitest, HTTP mocked through test/helpers.ts
+docs-public/        images for the README (docs/ is local-only and gitignored)
 runs/  data/        local only, gitignored
 ```
 
@@ -118,4 +148,4 @@ model IDs must end in `:batch`.
 
 ## Before committing
 
-`pnpm test && pnpm typecheck`. Don't commit `runs/`, `data/`, `dist/`, `.env`, or anything containing an API key.
+`pnpm test && pnpm typecheck && pnpm build` (`typecheck` covers both `src` and the `ui/` app). Don't commit `runs/`, `data/`, `dist/`, `.env`, or anything containing an API key.
