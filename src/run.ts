@@ -1,13 +1,13 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
-import { parse } from 'csv-parse/sync';
 import type { Prices, RowRecord } from './pipeline.ts';
 import type { Row, Thresholds } from './task.ts';
 
 // Each run lives in runs/<runId>/:
 //   manifest.json   pinned model IDs, date, thresholds, prices, cost cap
-//   rows.jsonl      the input rows, so resume does not need the original CSV
+//   rows.jsonl      the normalized input rows, so resume does not need the original CSV
+//   normalized.csv, check-report.json   what `twopass check` changed and found in the input
 //   ledger.jsonl    everything that happened (see ledger.ts)
 //   enriched.csv, review.csv   outputs
 
@@ -29,6 +29,8 @@ export interface RunManifest {
   taskSha256: string;
   /** Every time the run was resumed with a changed task file. */
   taskChanges?: Array<{ at: string; sha256: string }>;
+  /** The input CSV as checked and normalized before the run (absent in runs made before `check`). */
+  input?: { originalSha256: string; normalizedSha256: string; checkReport: string; warnings: number };
   /** Model versions that actually answered, filled in as the run goes. */
   servedModels?: string[];
 }
@@ -42,12 +44,6 @@ export interface RunModels {
 
 export function sha256File(path: string): string {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
-}
-
-export function readCsv(path: string): { columns: string[]; rows: Row[] } {
-  const rows = parse(readFileSync(path, 'utf8'), { columns: true, skip_empty_lines: true, bom: true }) as Row[];
-  const columns = rows[0] ? Object.keys(rows[0]) : [];
-  return { columns, rows };
 }
 
 export function toRecords(rows: Row[], idColumn?: string): RowRecord[] {

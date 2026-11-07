@@ -6,13 +6,14 @@ import { calibrateStage, type StageCalibration } from './calibrate.ts';
 import { OpenRouterDecisionModel } from './decide/openrouter.ts';
 import { Ledger, replay, type RunState } from './ledger.ts';
 import { executePipeline, type RowOutcome } from './pipeline.ts';
-import { fetchPrices } from './prices.ts';
+import { CheckFailedError, checkCsv, formatCheckSummary, writeCheckOutputs } from './check.ts';
+import type { FetchFn } from './http.ts';
+import { fetchModelList, pricesFrom, type OpenRouterModel } from './prices.ts';
 import { writeOutputs } from './report.ts';
 import {
   createRunDir,
   loadRun,
   newRunId,
-  readCsv,
   runDir,
   sample,
   sha256File,
@@ -38,17 +39,21 @@ export interface StartRunOptions {
   thresholds?: { values: Thresholds; source: string };
   maxUsd?: number;
   runIdSuffix?: string;
+  /** Prints check warnings before the run starts. */
+  log?: (m: string) => void;
+  /** For tests: every HTTP call startRun makes (the model list) goes through this. */
+  fetch?: FetchFn;
 }
 
-/** Creates the run directory and manifest. Does not call any model except the price list. */
+export { CheckFailedError };
+
+/**
+ * Checks and normalizes the CSV (`twopass check`), then creates the run directory and manifest.
+ * Throws CheckFailedError, before any network call and without creating anything, when the CSV
+ * has errors. Calls no model; the only request is OpenRouter's model list (context lengths, prices).
+ */
 export async function startRun(o: StartRunOptions): Promise<{ dir: string; manifest: RunManifest }> {
   const task = await loadTask(o.taskPath);
-  const csv = readCsv(o.csvPath);
-  let records = toRecords(csv.rows, task.idColumn);
-  if (o.sample) records = sample(records, o.sample, o.seed ?? 7);
-  if (o.limit) records = records.slice(0, o.limit);
-  if (o.labelColumn && !csv.columns.includes(o.labelColumn)) throw new Error(`No column "${o.labelColumn}" in ${o.csvPath}`);
-
   const mode = o.mode ?? 'normal';
   const models: RunModels = {
     writer: o.models?.writer ?? task.models.writer,
@@ -56,6 +61,30 @@ export async function startRun(o: StartRunOptions): Promise<{ dir: string; manif
     triage: o.models?.triage ?? task.models.triage ?? task.models.decision,
     verify: o.models?.verify ?? task.models.verify ?? task.models.decision,
   };
+  // One GET /models serves both the context-length check and the prices.
+  let modelList: Promise<OpenRouterModel[]> | undefined;
+  const loadModels = () => (modelList ??= fetchModelList(o.apiKey, o.fetch ?? fetch));
+
+  const check = await checkCsv(o.csvPath, task, {
+    ...(o.labelColumn ? { labelColumn: o.labelColumn } : {}),
+    models:
+      mode === 'baseline'
+        ? { writer: models.writer }
+        : { writer: models.writer, escalation: models.escalation, ...(task.triage ? { triage: models.triage } : {}), verify: models.verify },
+    loadModels,
+  });
+  const summary = formatCheckSummary(check.report, { heading: `checking ${o.csvPath}` });
+  if (check.report.errors.length) {
+    throw new CheckFailedError(
+      `${summary}\n  Full report: twopass check ${o.csvPath} --task ${o.taskPath}${o.labelColumn ? ` --label ${o.labelColumn}` : ''}`,
+      check.report,
+    );
+  }
+  if (check.report.warnings.length) o.log?.(summary);
+
+  let records = toRecords(check.rows, task.idColumn);
+  if (o.sample) records = sample(records, o.sample, o.seed ?? 7);
+  if (o.limit) records = records.slice(0, o.limit);
   let thresholds = o.thresholds;
   if (!thresholds) {
     if (mode === 'normal' && !task.thresholds) throw new Error('The task has no thresholds. Pass them or a calibration file.');
@@ -70,19 +99,26 @@ export async function startRun(o: StartRunOptions): Promise<{ dir: string; manif
     createdAt: new Date().toISOString(),
     taskPath: resolve(o.taskPath),
     inputPath: resolve(o.csvPath),
-    inputColumns: csv.columns,
+    inputColumns: check.columns,
     rowCount: records.length,
     ...(o.labelColumn ? { labelColumn: o.labelColumn } : {}),
     mode,
     models,
     thresholds: thresholds.values,
     thresholdsSource: thresholds.source,
-    prices: await fetchPrices(o.apiKey, writerModels),
+    prices: pricesFrom(await loadModels(), writerModels),
     ...(o.maxUsd !== undefined ? { maxUsd: o.maxUsd } : {}),
     taskSha256: sha256File(o.taskPath),
+    input: {
+      originalSha256: check.report.input.sha256,
+      normalizedSha256: check.report.output.sha256,
+      checkReport: 'check-report.json',
+      warnings: check.report.warnings.length,
+    },
   };
   const dir = runDir(o.runsRoot, runId);
   createRunDir(dir, manifest, records);
+  writeCheckOutputs(dir, check);
   return { dir, manifest };
 }
 

@@ -1,0 +1,13 @@
+id,text,label
+test-00000,How do I locate my card?,card_arrival
+test-00001,"I still have not received my new card, I ordered over a week ago.",card_arrival
+test-00002,I ordered a card but it has not arrived. Help please!,card_arrival
+test-00003,Is there a way to know when my card will arrive?,card_arrival
+test-00004,My card has not arrived yet.,card_arrival
+test-00005,When will I get my card?,card_arrival
+test-00006,Do you know if there is a tracking number for the new card you sent me?,card_arrival
+test-00007,i have not received my card,card_arrival
+test-00008,still waiting on that card,card_arrival
+test-00009,Is it normal to have to wait over a week for my new card?,card_arrival
+test-00010,How do I track my card?,card_arrival
+test-00011,How long does a card delivery take?,card_arrival

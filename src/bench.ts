@@ -141,6 +141,7 @@ export async function runBench(o: BenchOptions): Promise<{ benchDir: string; rep
       labelColumn: 'label',
       models: { triage: first.triage, verify: first.verify },
       runIdSuffix: 'calib',
+      log: o.log,
     });
     state.calibrationRunId = manifest.runId;
     save();
@@ -186,6 +187,7 @@ export async function runBench(o: BenchOptions): Promise<{ benchDir: string; rep
             },
           }),
       runIdSuffix: c.name.replace(/\+/g, '-'),
+      log: o.log,
     });
     state.testRuns[c.name] = manifest.runId;
     save();
