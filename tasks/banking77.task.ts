@@ -9,6 +9,7 @@ const human = (label: string) => label.replace(/_/g, ' ');
 export default defineTask({
   name: 'banking77',
   idColumn: 'id',
+  inputColumns: ['text'],
   state: (row) => row.text ?? '',
   triage: {
     question: {

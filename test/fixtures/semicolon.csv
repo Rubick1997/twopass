@@ -1,0 +1,3 @@
+id;text;label
+r1;Wo ist meine Karte?;card_arrival
+r2;"Karte; gesperrt";lost_or_stolen_card

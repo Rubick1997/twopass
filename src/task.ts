@@ -19,6 +19,11 @@ export interface TaskDefinition {
   name: string;
   /** Column holding a stable row id. Defaults to the row's position. */
   idColumn?: string;
+  /**
+   * Columns the task reads besides `{{placeholders}}` in the writer templates (e.g. ones only
+   * `state` uses). `twopass check` refuses a CSV that lacks any of them.
+   */
+  inputColumns?: string[];
   /** What the decision model reads about an input row. */
   state: (row: Row) => DecisionState;
   /**

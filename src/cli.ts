@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-import { join, resolve } from 'node:path';
+import { basename, extname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { DECISION_ALIASES, listBenches, parseConfigs, runBench } from './bench.ts';
 import { BudgetExceededError } from './budget.ts';
+import { CheckFailedError, checkCsv, DELIMITERS, formatCheckSummary, writeCheckOutputs, type Delimiter } from './check.ts';
 import { NEVER, type StageCalibration } from './calibrate.ts';
 import { Ledger, replay } from './ledger.ts';
 import { BatchFailedError, computeOutcomes, TruncatedOutputError } from './pipeline.ts';
@@ -21,6 +22,13 @@ import { loadTask, validateThresholds, type Thresholds } from './task.ts';
 
 const USAGE = `twopass: batch LLM work, checked row by row by a decision model
 
+  twopass check <csv> --task <file.task.ts> [options]     no model calls, no cost
+      validates the CSV against the task and writes normalized.csv + check-report.json
+      (run and bench do this automatically and refuse to start on errors)
+      --label <column>       also validate labels (mapped to the task's allowed set)
+      --delimiter <d>        auto (default), ",", ";", tab or pipe
+      --out <dir>            default runs/checks/<timestamp>-<name>/
+      --json                 print the report instead of the summary
   twopass run <csv> --task <file.task.ts> [options]
       --max-usd <n>          stop before spending more than this (recommended)
       --sample <n>           use n rows, sampled with --seed (default 7)
@@ -79,6 +87,9 @@ async function main(argv: string[]): Promise<number> {
       'max-batch-rows': { type: 'string' },
       id: { type: 'string' },
       data: { type: 'string' },
+      delimiter: { type: 'string' },
+      out: { type: 'string' },
+      json: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -93,6 +104,24 @@ async function main(argv: string[]): Promise<number> {
   const maxUsd = values['max-usd'] !== undefined ? toNumber(values['max-usd'], 'max-usd') : undefined;
 
   switch (command) {
+    case 'check': {
+      if (!target || !values.task) throw new UsageError('check needs <csv> and --task <file>');
+      const task = await loadTask(values.task);
+      const result = await checkCsv(target, task, {
+        ...(values.label ? { labelColumn: values.label } : {}),
+        delimiter: parseDelimiter(values.delimiter),
+        ...(process.env.OPENROUTER_API_KEY ? { apiKey: process.env.OPENROUTER_API_KEY } : {}),
+      });
+      const stamp = new Date().toISOString().slice(0, 16).replace(/[-:]/g, '').replace('T', '-');
+      const outDir = resolve(values.out ?? join(runsRoot, 'checks', `${stamp}-${basename(target, extname(target))}`));
+      const reportPath = writeCheckOutputs(outDir, result);
+      if (values.json) log(JSON.stringify(result.report, null, 2));
+      else {
+        const args = [target, '--task', values.task, ...(values.label ? ['--label', values.label] : [])].join(' ');
+        log(formatCheckSummary(result.report, { heading: `twopass check ${args}`, reportPath }));
+      }
+      return result.report.errors.length ? 1 : 0;
+    }
     case 'run': {
       if (!target || !values.task) throw new UsageError('run needs <csv> and --task <file>');
       const apiKey = requireKey();
@@ -120,6 +149,7 @@ async function main(argv: string[]): Promise<number> {
         models,
         ...(thresholds ? { thresholds } : {}),
         ...(maxUsd !== undefined ? { maxUsd } : {}),
+        log,
       });
       log(`run ${manifest.runId} (${manifest.mode}): ${manifest.rowCount} rows → ${dir}`);
       log(`  triage ${manifest.models.triage}, verify ${manifest.models.verify}; thresholds ${fmtThresholds(manifest.thresholds)} from ${manifest.thresholdsSource}`);
@@ -271,6 +301,14 @@ function requireKey(): string {
 
 class UsageError extends Error {}
 
+function parseDelimiter(v: string | undefined): 'auto' | Delimiter {
+  if (v === undefined || v === 'auto') return 'auto';
+  const named: Record<string, Delimiter> = { tab: '\t', '\\t': '\t', pipe: '|', comma: ',', semicolon: ';' };
+  const d = named[v] ?? v;
+  if (!(DELIMITERS as readonly string[]).includes(d)) throw new UsageError('--delimiter must be auto, ",", ";", tab or pipe');
+  return d as Delimiter;
+}
+
 const toNumber = (v: string, name: string): number => {
   const n = Number(v);
   if (!Number.isFinite(n)) throw new UsageError(`--${name} must be a number`);
@@ -285,7 +323,8 @@ const toInt = (v: string, name: string): number => {
 main(process.argv.slice(2)).then(
   (code) => process.exit(code),
   (err) => {
-    console.error(err instanceof UsageError ? `${err.message}\n\n${USAGE}` : err);
+    if (err instanceof CheckFailedError) console.error(err.message);
+    else console.error(err instanceof UsageError ? `${err.message}\n\n${USAGE}` : err);
     process.exit(1);
   },
 );

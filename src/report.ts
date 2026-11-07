@@ -81,9 +81,20 @@ export function summaryLine(s: Summary): string {
   return parts.join(' · ');
 }
 
+/**
+ * OWASP CSV-injection guidance: a cell starting with =, +, @, tab or CR, or a "-" that does not
+ * start a number, gets a leading apostrophe so spreadsheets show it as text. "-12.5" is unchanged.
+ */
+export const isFormulaLike = (v: string): boolean => /^(?:[=+@\t\r]|-(?=\D))/.test(v);
+
+export const escapeCell = (v: string): string => (isFormulaLike(v) ? `'${v}` : v);
+
+const escapeRecord = (r: Record<string, string>) =>
+  Object.fromEntries(Object.entries(r).map(([k, v]) => [k, escapeCell(v)]));
+
 export function writeOutputs(runDir: string, outcomes: RowOutcome[], inputColumns: string[]): void {
   const columns = [...inputColumns.filter((c) => !(OUTPUT_COLUMNS as readonly string[]).includes(c)), ...OUTPUT_COLUMNS];
-  const toRecord = (o: RowOutcome) => ({
+  const toRecord = (o: RowOutcome) => escapeRecord({
     ...o.data,
     answer: o.answer,
     confidence: o.confidence === null ? '' : o.confidence.toFixed(4),
@@ -92,7 +103,7 @@ export function writeOutputs(runDir: string, outcomes: RowOutcome[], inputColumn
     round: o.status === 'pending' ? '' : String(o.round),
     cost_usd: o.costUsd.toFixed(6),
     status: o.status,
-  });
+  } as Record<string, string>);
   writeFileSync(join(runDir, 'enriched.csv'), stringify(outcomes.map(toRecord), { header: true, columns }));
   writeFileSync(
     join(runDir, 'review.csv'),
