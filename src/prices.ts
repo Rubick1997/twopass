@@ -14,15 +14,20 @@ const modelsSchema = z.looseObject({
 
 export type OpenRouterModel = z.infer<typeof modelsSchema>['data'][number];
 
-/** OpenRouter's public model list (GET /models). The key is sent when given but is not required. */
+/**
+ * OpenRouter's public model list. The key is sent when given but is not required. Decision models
+ * (Jev, Clef, Luna, …) only appear with `?output_modalities=decisions`, so both lists are fetched.
+ */
 export async function fetchModelList(apiKey: string | undefined, fetchFn: FetchFn = fetch, retry?: RetryOptions): Promise<OpenRouterModel[]> {
-  const raw = await requestJson<unknown>(
-    fetchFn,
-    'https://openrouter.ai/api/v1/models',
-    { method: 'GET', headers: apiKey ? authHeaders(apiKey) : { 'X-Title': 'TwoPass' } },
-    retry,
+  const headers = apiKey ? authHeaders(apiKey) : { 'X-Title': 'TwoPass' };
+  const lists = await Promise.all(
+    ['https://openrouter.ai/api/v1/models', 'https://openrouter.ai/api/v1/models?output_modalities=decisions'].map(
+      async (url) => modelsSchema.parse(await requestJson<unknown>(fetchFn, url, { method: 'GET', headers }, retry)).data,
+    ),
   );
-  return modelsSchema.parse(raw).data;
+  const byId = new Map<string, OpenRouterModel>();
+  for (const m of lists.flat()) if (!byId.has(m.id)) byId.set(m.id, m);
+  return [...byId.values()];
 }
 
 /** Live per-token prices from OpenRouter, pinned into the run manifest. */

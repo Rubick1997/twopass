@@ -192,6 +192,14 @@ describe('checkCsv: labels', () => {
     expect(e.message).toContain('"card arrival" ×1 (ambiguous: card_arrival, Card-Arrival)');
   });
 
+  it('never prints a bad label value that looks like personal data', async () => {
+    const { report } = await check('id,text,label\nr1,a,jane.doe@example.com\nr2,b,card_arrival\n', { labelColumn: 'label' });
+    const e = find(report.errors, 'invalid_labels');
+    expect(e.rows).toEqual([1]);
+    expect(e.message).toContain('<redacted: possible personal data>');
+    expect(JSON.stringify(report) + formatCheckSummary(report)).not.toContain('jane.doe');
+  });
+
   it('validates non-enum schemas with parseOutput and does not map', async () => {
     const task = makeTask({}, { outputSchema: z.string().regex(/^[a-z]+$/) });
     const { report } = await check('id,text,label\nr1,a,ok\nr2,b,Not Ok\n', { labelColumn: 'label' }, task);
@@ -277,7 +285,7 @@ describe('checkCsv: context length', () => {
     const long = 'x'.repeat(300);
     const m = models({ 'w:batch': 100, 'e:batch': 100_000 });
     const { report } = await check(`id,text\nr1,short\nr2,${long}\n`, { fetch: m.fetch });
-    expect(m.calls).toHaveLength(1);
+    expect(m.calls).toHaveLength(2); // the model list and the decision-model list
     const e = find(report.errors, 'context_too_long');
     expect(e.rows).toEqual([2]);
     expect(e.message).toContain('w:batch: 100 tokens');
@@ -387,7 +395,7 @@ describe('startRun runs the check first', () => {
       fetch: m.fetch,
       log: (l) => logs.push(l),
     });
-    expect(m.calls).toHaveLength(1); // one /models request serves the check and the prices
+    expect(m.calls).toHaveLength(2); // one model-list fetch (regular + decision models) serves the check and the prices
     expect(readdirSync(dir)).toEqual(expect.arrayContaining(['normalized.csv', 'check-report.json', 'rows.jsonl', 'manifest.json']));
     const report = JSON.parse(readFileSync(join(dir, 'check-report.json'), 'utf8')) as CheckReport;
     expect(report.output.path).toBe(join(dir, 'normalized.csv'));

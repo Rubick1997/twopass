@@ -534,7 +534,7 @@ function checkLabels<T extends { n: number; cells: string[] }>(
     const entries = [...bad.entries()].sort((a, b) => b[1].rows.length - a[1].rows.length);
     const shown = entries
       .slice(0, 20)
-      .map(([v, b]) => `"${v}" ×${b.rows.length}${b.candidates.length > 1 ? ` (ambiguous: ${b.candidates.join(', ')})` : ''}`)
+      .map(([v, b]) => `${showValue(v)} ×${b.rows.length}${b.candidates.length > 1 ? ` (ambiguous: ${b.candidates.join(', ')})` : ''}`)
       .join(', ');
     const allRows = entries.flatMap(([, b]) => b.rows).sort((a, b) => a - b);
     error(
@@ -563,6 +563,10 @@ function checkLabels<T extends { n: number; cells: string[] }>(
 }
 
 // ------------------------------------------------------------------- personal data
+
+/** A bad value as it may appear in a message. Values that look like personal data are never printed. */
+const showValue = (v: string): string =>
+  findPii([{ n: 0, values: [v] }]).size ? '"<redacted: possible personal data>"' : `"${v}"`;
 
 type PiiType = 'email' | 'phone' | 'card' | 'iban';
 const PII_NAMES: Record<PiiType, string> = {
@@ -703,7 +707,7 @@ async function checkContext(
   if (unknown.size) {
     info.push({
       code: 'context_length_unknown',
-      message: `context length not listed for ${[...unknown].join(', ')} (decision models are not in /models); not checked`,
+      message: `context length not listed on OpenRouter for ${[...unknown].join(', ')}; not checked`,
     });
   }
 }

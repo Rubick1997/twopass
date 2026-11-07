@@ -133,9 +133,23 @@ when the batch is submitted. On a small balance, add `--max-batch-rows 500` to s
 
 ## Limitations
 
-- **Possible benchmark contamination.** Banking77 is public and old. Clef is an open-weights fine-tune, and its 0.942
-  top-1 accuracy is close to fine-tuned state of the art. Sonnet named the dataset in its reasoning. A paraphrase test
-  has not been done yet. Until it is, treat Clef's number as an upper bound.
+- **Benchmark contamination: no sign of memorized test wording, but not ruled out entirely.** Banking77 is public
+  and old, and Clef's 0.942 top-1 accuracy is close to fine-tuned state of the art. So we paraphrased 300 test
+  messages (Claude Haiku, about 22% word overlap with the originals) and asked each decision model again
+  ([`scripts/contamination-check.ts`](scripts/contamination-check.ts)):
+
+  | Round-0 top-1 | Original wording | Paraphrased | Drop (95% CI) |
+  |---|---|---|---|
+  | Jev | 76.0% | 74.0% | 2.0 pts (−0.7 to 5.0) |
+  | Clef | 93.3% | 89.7% | 3.7 pts (0.3 to 7.0) |
+  | Luna | 76.0% | 71.7% | 4.3 pts (0.7 to 8.0) |
+
+  Clef doesn't lose more than the others: the drop differences are all within ±2.3 points, and every 95% interval
+  includes zero. Memorized test wording would show as a much larger drop for Clef. What this can't rule out is that Clef was trained on
+  Banking77's *training* split or similar banking-intent data, which would help it here without transferring to
+  your own label set. That's another reason to calibrate on your own data. With 300 rows, the test can detect a
+  memorization effect of about 5 points or more. Sonnet also named the dataset in its reasoning, so the
+  frontier baseline may know it too.
 - **OpenRouter batch has no zero data retention and runs on US infrastructure only.** Use public or non-sensitive data.
 - **Each batch round can take up to 24 hours.** In practice: 4–8 minutes per round.
 - **The Decisions API is alpha** (`/api/alpha/decisions`). Model IDs and behaviour may change. Every run pins what it used.
