@@ -44,7 +44,8 @@ git clone https://github.com/Rubick1997/twopass.git && cd twopass
 pnpm install
 export OPENROUTER_API_KEY=sk-or-...
 
-# a small end-to-end benchmark: about $0.60 and 30 minutes, mostly waiting for batches
+# a small end-to-end benchmark: about $0.60 and 30–50 minutes, mostly waiting for batches
+# (the first run also downloads Banking77, ~5 min)
 node src/cli.ts bench banking77 --calibration-size 60 --test-size 40 --max-usd 1
 ```
 
