@@ -7,7 +7,7 @@ import { CheckFailedError, checkCsv, DELIMITERS, formatCheckSummary, writeCheckO
 import { NEVER, type StageCalibration } from './calibrate.ts';
 import { readOverrides } from './overrides.ts';
 import { BatchFailedError, TruncatedOutputError } from './pipeline.ts';
-import { loadReport, reviewLine, summarize, summaryLine, writeOutputs } from './report.ts';
+import { costCheckLine, loadReport, reviewLine, summarize, summaryLine, writeOutputs } from './report.ts';
 import { runDir } from './run.ts';
 import {
   calibrateRun,
@@ -319,6 +319,7 @@ function printSummary(s: ReturnType<typeof summarize>) {
   for (const r of s.rounds) {
     console.log(`  round ${r.round}: ${r.batches} batch(es), median ${r.medianMinutes.toFixed(1)} min, worst ${r.worstMinutes.toFixed(1)} min`);
   }
+  if (s.costCheck) console.log(`  ${costCheckLine(s.costCheck)}`);
 }
 
 function pickThresholds(

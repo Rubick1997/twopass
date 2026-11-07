@@ -177,6 +177,7 @@ export function decodeResultLine(raw: unknown): BatchResultLine | null {
   const usage = {
     inputTokens: body.data.usage?.prompt_tokens ?? 0,
     outputTokens: body.data.usage?.completion_tokens ?? 0,
+    ...(body.data.usage ? { usage: body.data.usage } : {}),
   };
   const choice = body.data.choices[0];
   if (choice?.finish_reason === 'length') {

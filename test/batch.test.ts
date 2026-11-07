@@ -65,6 +65,7 @@ describe('decoding result lines', () => {
       text: 'card_arrival',
       inputTokens: 46,
       outputTokens: 13,
+      usage: { prompt_tokens: 46, completion_tokens: 13 },
     });
   });
 

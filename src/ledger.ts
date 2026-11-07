@@ -48,6 +48,9 @@ export interface BatchResultEvent {
   error?: string;
   inputTokens: number;
   outputTokens: number;
+  /** Raw provider usage (cache reads/writes, reasoning). Absent in ledgers written before 2026-11-07. */
+  usage?: unknown;
+  /** Computed from `usage` and the pinned prices; the batch total the provider billed is on `batch_finished`. */
   costUsd: number;
   at: string;
 }

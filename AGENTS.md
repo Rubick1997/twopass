@@ -110,6 +110,7 @@ src/
   report.ts         summary, review summary and accuracy, enriched.csv / review.csv
   batch/            BatchProvider interface + OpenRouter Batch API client
   decide/           DecisionModel interface + OpenRouter Decisions API client
+  cost/             usage.ts: raw usage → uncached / cache read / cache write / output; price.ts: price those buckets
   task.ts           task definition (prompt, schema, verify question, models, thresholds)
   calibrate.ts      threshold fitting, isotonic calibration, ECE/Brier/AUC (pure)
   score.ts          ledger → (score, p, correct) points per model and stage
@@ -162,6 +163,9 @@ runs/  data/        local only, gitignored
 | Without a strict JSON-schema `response_format`, Sonnet explains instead of answering | task `responseFormat` |
 | OpenRouter reserves each batch's **worst case** (all rows at `max_tokens`) from the balance → 402 if short | `--max-batch-rows` |
 | Bulk `finish_reason: length` is a settings error, not flaky rows → the run stops | `TruncatedOutputError` |
+| OpenRouter `prompt_tokens` **includes** cache reads (`cached_tokens`) and writes (`cache_write_tokens`); `prompt × input price` is then wrong (48% low on a cache write, 6.4× high on a hit) | `src/cost/` |
+| Batch result rows carry tokens but **no cost**; only the batch has `usage.cost` (`GET /generation?id=` gives per-row cost) | per-row cost is computed, `report` checks it against the billed total |
+| Anthropic caches only prefixes of 512+ tokens and silently skips shorter ones; the usage doesn't say which TTL was written | task `writer.cacheSystem` |
 
 ## Adding a task
 
@@ -169,6 +173,12 @@ Copy `tasks/banking77.task.ts`. Define `state`, the `writer` prompt with `{{colu
 (zod), the `verify` instructions, and the models. List columns that only `state` or `verify.state` read in
 `inputColumns`, so `check` can require them. Add `triage` only for closed-choice tasks. Writer and escalation
 model IDs must end in `:batch`.
+
+## Cost numbers
+
+Each `batch_result` keeps the provider's raw `usage` and a per-row `costUsd` priced from it (cache buckets
+separately, prices pinned in the manifest). `spentUsd` and the summary's `$` use the batch total OpenRouter billed.
+`report` prints both: `cost check: per-row cost $X vs billed $Y`. A gap there means the pricing code is wrong.
 
 ## Before committing
 

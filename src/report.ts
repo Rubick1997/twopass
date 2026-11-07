@@ -38,6 +38,8 @@ export interface Summary {
   precision?: { correct: number; of: number };
   rounds: RoundTiming[];
   review: ReviewSummary;
+  /** Batches the provider reported a total for: our per-row cost summed, against that total. */
+  costCheck?: CostCheck;
 }
 
 export interface ReviewSummary {
@@ -65,6 +67,12 @@ export interface Accuracy {
   of: number;
 }
 
+export interface CostCheck {
+  batches: number;
+  computedUsd: number;
+  billedUsd: number;
+}
+
 export interface RoundTiming {
   round: 1 | 2;
   batches: number;
@@ -86,6 +94,8 @@ export function summarize(outcomes: RowOutcome[], st: RunState, labelColumn?: st
     rounds: roundTimings(st),
     review: reviewSummary(foldOverrides(outcomes, overrides), labelColumn),
   };
+  const check = costCheck(st);
+  if (check) summary.costCheck = check;
   if (labelColumn) {
     const correct = accepted.filter((o) => matchesLabel(o.answer, o.data[labelColumn])).length;
     summary.precision = { correct, of: accepted.length };
@@ -133,6 +143,22 @@ export function reviewLine(r: ReviewSummary): string | null {
   if (r.reviewed || r.reviewedOther) parts.push(`${n(r.overridden)} answer${r.overridden === 1 ? '' : 's'} changed`);
   if (r.accuracy?.of) parts.push(`accuracy, no human ${pct(r.accuracy.noHuman)} → with a human ${pct(r.accuracy.withHuman)}`);
   return parts.join(' · ');
+}
+
+export function costCheck(st: RunState): CostCheck | undefined {
+  const billed = [...st.batches.values()].filter((b) => b.finished && b.reportedCostUsd !== null);
+  if (!billed.length) return undefined;
+  return {
+    batches: billed.length,
+    computedUsd: billed.reduce((n, b) => n + b.resultCostUsd, 0),
+    billedUsd: billed.reduce((n, b) => n + (b.reportedCostUsd ?? 0), 0),
+  };
+}
+
+/** e.g. "cost check: per-row cost $1.0468 vs billed $1.0468 over 2 batches (+0.0%)" */
+export function costCheckLine(c: CostCheck): string {
+  const err = c.billedUsd > 0 ? `${c.computedUsd >= c.billedUsd ? '+' : ''}${((100 * (c.computedUsd - c.billedUsd)) / c.billedUsd).toFixed(1)}%` : 'n/a';
+  return `cost check: per-row cost $${c.computedUsd.toFixed(4)} vs billed $${c.billedUsd.toFixed(4)} over ${c.batches} batch(es) (${err})`;
 }
 
 function roundTimings(st: RunState): RoundTiming[] {

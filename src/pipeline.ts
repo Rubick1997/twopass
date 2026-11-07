@@ -1,5 +1,7 @@
-import type { BatchProvider, BatchRequest } from './batch/provider.ts';
+import type { BatchProvider, BatchRequest, BatchResultLine } from './batch/provider.ts';
 import { Budget, BudgetExceededError } from './budget.ts';
+import { priceUsage, type CacheTtl, type ModelPrice } from './cost/price.ts';
+import { bucketsFromOpenRouter } from './cost/usage.ts';
 import { asChoice, type DecisionModel, type DecisionState, type Questions } from './decide/model.ts';
 import { createLimiter } from './http.ts';
 import {
@@ -26,7 +28,7 @@ export interface RowRecord {
   data: Row;
 }
 
-export type Prices = Record<string, { inputPerToken: number; outputPerToken: number }>;
+export type Prices = Record<string, ModelPrice>;
 
 export interface PipelineContext {
   task: TaskDefinition;
@@ -217,7 +219,7 @@ export function writerSettings(task: TaskDefinition, round: 1 | 2, mode: Pipelin
   };
 }
 
-function writerBody(
+export function writerBody(
   task: TaskDefinition,
   row: Row,
   round: 1 | 2,
@@ -232,8 +234,21 @@ function writerBody(
     const parsed = text === undefined ? undefined : parseWriterOutput(task, text);
     vars.previous_answer = parsed?.ok ? parsed.value : (text ?? '(none)');
   }
+  const system = task.writer.system;
+  const cache = task.writer.cacheSystem;
   const messages = [
-    ...(task.writer.system ? [{ role: 'system', content: task.writer.system }] : []),
+    ...(system
+      ? [
+          {
+            role: 'system',
+            // The system prompt is the same on every row; marking it cacheable bills repeats at the
+            // cache-read price. Anthropic caches only prefixes of 512+ tokens and silently skips shorter ones.
+            content: cache
+              ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral', ...(cache === '1h' ? { ttl: '1h' } : {}) } }]
+              : system,
+          },
+        ]
+      : []),
     { role: 'user', content: render(s.template, vars) },
   ];
   return {
@@ -279,6 +294,26 @@ export function estimateCost(
   return inputTokens * price.inputPerToken + requests.length * perRow * price.outputPerToken;
 }
 
+/**
+ * Per-row cost from the raw usage, with cache reads and writes priced separately. A usage object that
+ * doesn't add up falls back to plain token math instead of stopping the run: the batch total the
+ * provider bills is what the budget charges either way.
+ */
+export function computedRowCost(
+  line: Pick<BatchResultLine, 'inputTokens' | 'outputTokens' | 'usage'>,
+  price: ModelPrice,
+  cacheTtl: CacheTtl,
+): number {
+  if (line.usage) {
+    try {
+      return priceUsage(bucketsFromOpenRouter(line.usage), price, cacheTtl);
+    } catch {
+      // fall through
+    }
+  }
+  return line.inputTokens * price.inputPerToken + line.outputTokens * price.outputPerToken;
+}
+
 async function collectBatch(ctx: PipelineContext, batch: BatchInfo): Promise<void> {
   log(ctx, `round ${batch.round}: waiting for batch ${batch.batchId} (${batch.customIds.length} rows)`);
   const final = await ctx.batch.waitForTerminal(batch.batchId, {
@@ -306,7 +341,7 @@ async function collectBatch(ctx: PipelineContext, batch: BatchInfo): Promise<voi
     if (!expected.has(line.custom_id) || seen.has(line.custom_id)) continue;
     seen.add(line.custom_id);
     if (st.results.get(line.custom_id)?.batchId === batch.batchId) continue; // already saved before a crash
-    const costUsd = line.inputTokens * price.inputPerToken + line.outputTokens * price.outputPerToken;
+    const costUsd = computedRowCost(line, price, ctx.task.writer.cacheSystem ?? '5m');
     rowCost += costUsd;
     if (line.truncated) truncated++;
     ctx.ledger.append({
@@ -321,6 +356,7 @@ async function collectBatch(ctx: PipelineContext, batch: BatchInfo): Promise<voi
       ...(line.error !== undefined ? { error: line.error } : {}),
       inputTokens: line.inputTokens,
       outputTokens: line.outputTokens,
+      ...(line.usage !== undefined ? { usage: line.usage } : {}),
       costUsd,
     });
   }
