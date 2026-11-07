@@ -192,6 +192,14 @@ describe('checkCsv: labels', () => {
     expect(e.message).toContain('"card arrival" ×1 (ambiguous: card_arrival, Card-Arrival)');
   });
 
+  it('never prints a bad label value that looks like personal data', async () => {
+    const { report } = await check('id,text,label\nr1,a,jane.doe@example.com\nr2,b,card_arrival\n', { labelColumn: 'label' });
+    const e = find(report.errors, 'invalid_labels');
+    expect(e.rows).toEqual([1]);
+    expect(e.message).toContain('<redacted: possible personal data>');
+    expect(JSON.stringify(report) + formatCheckSummary(report)).not.toContain('jane.doe');
+  });
+
   it('validates non-enum schemas with parseOutput and does not map', async () => {
     const task = makeTask({}, { outputSchema: z.string().regex(/^[a-z]+$/) });
     const { report } = await check('id,text,label\nr1,a,ok\nr2,b,Not Ok\n', { labelColumn: 'label' }, task);
