@@ -19,6 +19,7 @@ import {
   type CalibrationFile,
 } from './runner.ts';
 import { scoreRun, type Stage } from './score.ts';
+import { spendByStage, type StageSpend } from './stats.ts';
 import { loadTask } from './task.ts';
 
 // `twopass bench banking77`:
@@ -67,7 +68,7 @@ export interface BenchOptions {
   log: (m: string) => void;
 }
 
-interface BenchState {
+export interface BenchState {
   benchId: string;
   createdAt: string;
   taskPath: string;
@@ -81,6 +82,8 @@ interface BenchState {
   calibrationRunId?: string;
   calibrationPath?: string;
   testRuns: Record<string, string>;
+  /** The cost cap of the latest invocation (shared by every run in the bench). Absent in older benches. */
+  maxUsd?: number;
 }
 
 
@@ -110,6 +113,7 @@ export async function runBench(o: BenchOptions): Promise<{ benchDir: string; rep
     };
   }
   const save = () => writeFileSync(statePath, JSON.stringify(state, null, 2) + '\n');
+  state.maxUsd = o.maxUsd;
   if (o.baselineSize !== undefined && o.baselineSize !== state.baselineSize) {
     // Changing the baseline size is allowed only while the baseline has not spent anything.
     const existing = state.testRuns.baseline;
@@ -284,7 +288,7 @@ export interface ConfigResult {
   accuracyNoHuman: number;
   /** Decision model's own top-1 accuracy in round 0 (the 0.870 claim for Jev). */
   triageTop1: number | null;
-  costPer1k: Record<'triage' | 'write1' | 'verify1' | 'write2' | 'verify2' | 'total', number>;
+  costPer1k: StageSpend;
   minutes: { round0: number | null; rounds: Array<{ round: 1 | 2; median: number; worst: number }>; total: number };
   calibration: StageEce[];
 }
@@ -320,7 +324,7 @@ async function buildReport(runsRoot: string, state: BenchState, calibration: Cal
   };
 }
 
-async function configResult(
+export async function configResult(
   name: string,
   dir: string,
   runId: string,
@@ -338,14 +342,7 @@ async function configResult(
   const accepted = outcomes.filter((o) => o.status === 'accepted');
   const s = summarize(outcomes, st, 'label');
 
-  const cost = { triage: 0, write1: 0, verify1: 0, write2: 0, verify2: 0, total: 0 };
-  for (const d of st.triage.values()) cost.triage += d.costUsd;
-  for (const d of st.verify.values()) cost[d.round === 1 ? 'verify1' : 'verify2'] += d.costUsd;
-  for (const b of st.batches.values()) {
-    const c = b.reportedCostUsd ?? b.resultCostUsd;
-    cost[b.round === 1 ? 'write1' : 'write2'] += c;
-  }
-  cost.total = st.spentUsd;
+  const cost = spendByStage(st);
   const per1k = Object.fromEntries(Object.entries(cost).map(([k, v]) => [k, (1000 * v) / n])) as ConfigResult['costPer1k'];
 
   const triageTimes = [...st.triage.values()].map((d) => Date.parse(d.at)).sort((a, b) => a - b);
