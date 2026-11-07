@@ -703,7 +703,7 @@ async function checkContext(
   if (unknown.size) {
     info.push({
       code: 'context_length_unknown',
-      message: `context length not listed for ${[...unknown].join(', ')} (decision models are not in /models); not checked`,
+      message: `context length not listed on OpenRouter for ${[...unknown].join(', ')}; not checked`,
     });
   }
 }
