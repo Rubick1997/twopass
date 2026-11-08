@@ -573,6 +573,407 @@ table.data th {
   margin: 8px 0;
 }
 
+/* ---------------------------------------------------------------- review queue */
+
+kbd {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--code-bg);
+  color: var(--text);
+}
+
+.button-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--surface);
+  font-weight: 600;
+  text-decoration: none;
+  display: inline-block;
+}
+
+.button-primary kbd {
+  background: transparent;
+  color: inherit;
+  border-color: currentColor;
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.review-cta {
+  margin: 8px 0 12px;
+}
+
+.note-warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border: 1px solid var(--warn);
+}
+
+.error-text {
+  color: var(--danger);
+}
+
+.ok-text {
+  color: var(--ok);
+}
+
+.review-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.review-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 8px 24px;
+  align-items: start;
+}
+
+.review-summary p {
+  margin: 4px 0;
+}
+
+.accuracy strong {
+  font-size: 1.1rem;
+}
+
+.outputs {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  padding: 0;
+  margin: 0 0 12px;
+}
+
+.filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.filter input {
+  margin: 0 2px 0 0;
+}
+
+.filter-on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+
+.filter:has(input:focus-visible) {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.review-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.queue {
+  padding: 12px 0 0;
+  position: sticky;
+  top: 8px;
+}
+
+.queue .card-title {
+  padding: 0 12px;
+}
+
+.queue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.queue-item {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-left: 4px solid transparent;
+  padding: 8px 12px 8px 8px;
+  cursor: pointer;
+}
+
+.queue-item:hover {
+  background: var(--neutral-soft);
+}
+
+.queue-current {
+  background: var(--accent-soft);
+  border-left-color: var(--accent);
+}
+
+.queue-current:hover {
+  background: var(--accent-soft);
+}
+
+.queue-id {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.queue-preview {
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.queue-done .queue-status {
+  color: var(--ok);
+}
+
+.queue-status {
+  color: var(--muted);
+}
+
+.detail-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.detail h3 {
+  margin: 20px 0 8px;
+  font-size: 0.95rem;
+}
+
+.input-fields {
+  margin: 0 0 12px;
+}
+
+.input-fields dt {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.input-fields dd {
+  margin: 0 0 8px;
+}
+
+.input-text {
+  font-size: 1.1rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.answer-box {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  background: var(--bg);
+}
+
+.answer-box p {
+  margin: 2px 0;
+}
+
+.answer {
+  font-family: var(--mono);
+  font-size: 1.05rem;
+}
+
+.decision {
+  font-weight: 500;
+}
+
+.note-text {
+  font-style: italic;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.expected {
+  margin-top: 12px;
+}
+
+.top3 {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.top3 li {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.2fr) minmax(80px, 1fr) 3.5em;
+  align-items: center;
+  gap: 10px;
+}
+
+.top3-pick {
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: inherit;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+
+.top3-pick:hover {
+  border-color: var(--accent);
+}
+
+.top3-label {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.top3-bar {
+  height: 10px;
+  background: var(--track);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.top3-bar span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+table.rounds td.answer-cell {
+  white-space: normal;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  min-width: 160px;
+  overflow-wrap: anywhere;
+}
+
+.modal {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  padding: 16px;
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+}
+
+.modal::backdrop {
+  background: rgb(0 0 0 / 0.45);
+}
+
+.modal-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.modal-head .card-title {
+  margin: 0;
+}
+
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.text-input {
+  font: inherit;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.picker-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 50vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.picker-option {
+  padding: 6px 10px;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  cursor: pointer;
+  border-left: 4px solid transparent;
+}
+
+.picker-active {
+  background: var(--accent-soft);
+  border-left-color: var(--accent);
+  font-weight: 600;
+}
+
+.shortcuts th {
+  width: 6em;
+}
+
+@media (max-width: 800px) {
+  .review-layout {
+    grid-template-columns: 1fr;
+  }
+  .queue {
+    position: static;
+  }
+  .queue-list {
+    max-height: 40vh;
+  }
+  .top3 li {
+    grid-template-columns: 1fr 3.5em;
+  }
+  .top3-bar {
+    grid-column: 1 / -1;
+    order: 3;
+  }
+}
+
 @media (max-width: 640px) {
   main {
     padding: 12px 16px 48px;

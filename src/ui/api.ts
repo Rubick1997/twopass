@@ -2,12 +2,27 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import type { BenchState } from '../bench.ts';
-import { asChoice } from '../decide/model.ts';
+import { requiredColumns } from '../check.ts';
+import { asChoice, CANNOT_TELL } from '../decide/model.ts';
 import type { FetchFn } from '../http.ts';
 import { customId, parseLedger, replay, verifyKey, type LedgerEvent, type RunState } from '../ledger.ts';
 import { isLockLive, isPidAlive, readRunLock } from '../lock.ts';
 import { computeOutcomes, writerSettings, type RowOutcome, type RowRecord } from '../pipeline.ts';
-import { summarize } from '../report.ts';
+import {
+  allowedAnswers,
+  appendOverride,
+  decisionInputSchema,
+  foldOverrides,
+  makeOverride,
+  MAX_ANSWER_CHARS,
+  MAX_NOTE_CHARS,
+  OverrideError,
+  overridesPath,
+  validateAnswer,
+  readOverrides,
+  type FoldedOutcome,
+} from '../overrides.ts';
+import { reviewSummary, rewriteOutputs, summarize, type ReviewSummary } from '../report.ts';
 import { loadRun, type RunManifest } from '../run.ts';
 import { batchDurationMs, median, spendByStage } from '../stats.ts';
 import { loadTask, parseWriterOutput, render, type TaskDefinition } from '../task.ts';
@@ -24,7 +39,16 @@ import type {
   BenchReportResponse,
   ExpectedFinish,
   OutcomeCounts,
+  OutputsResponse,
+  OverrideResponse,
   Reserve,
+  ReviewAccuracy,
+  ReviewCounts,
+  ReviewFilter,
+  ReviewResponse,
+  ReviewRow,
+  RoundAnswer,
+  TriageInfo,
   RunActivity,
   RunDetail,
   RunListItem,
@@ -219,6 +243,7 @@ function resumeCommand(runsRoot: string, runId: string, bench: { ref: BenchRef; 
 function toListItem(run: LoadedRun, o: ApiOptions, bench: { ref: BenchRef; bench: BenchState } | undefined): RunListItem {
   const m = run.manifest;
   const { status, activity } = runStatus(run, o);
+  const review = reviewOf(run);
   const benchCap = bench?.bench.maxUsd;
   const maxUsd = m.maxUsd ?? benchCap ?? null;
   return {
@@ -236,6 +261,7 @@ function toListItem(run: LoadedRun, o: ApiOptions, bench: { ref: BenchRef; bench
     capScope: m.maxUsd !== undefined ? 'run' : benchCap !== undefined ? 'bench' : null,
     lastEventAt: run.st.lastAt ?? null,
     bench: bench?.ref ?? null,
+    review: review ? { flagged: review.summary.flagged, reviewed: review.summary.reviewed, remaining: review.summary.remaining } : null,
     ...(run.problem ? { problem: run.problem } : {}),
   };
 }
@@ -722,4 +748,221 @@ export async function getBalance(
   const v = cache.current.value;
   if ('error' in v) return { available: false, reason: v.error, reserve };
   return { available: true, ...v, balanceUsd: v.totalCredits - v.totalUsage, reserve };
+}
+
+// ---------------------------------------------------------------- review queue
+
+interface FoldedRun {
+  key: string;
+  folded: FoldedOutcome[];
+  summary: ReviewSummary;
+}
+
+const foldCache = new Map<string, FoldedRun>();
+
+/** The run's outcomes with overrides.jsonl folded in; null when outcomes are unknown. Cached by file stats. */
+function reviewOf(run: LoadedRun): FoldedRun | null {
+  if (!run.outcomes) return null;
+  const key = `${run.key}|${statKey(overridesPath(run.dir))}`;
+  const hit = foldCache.get(run.dir);
+  if (hit && hit.key === key) return hit;
+  const folded = foldOverrides(run.outcomes, readOverrides(run.dir));
+  const result = { key, folded, summary: reviewSummary(folded, run.manifest.labelColumn) };
+  foldCache.set(run.dir, result);
+  return result;
+}
+
+const FILTERS: readonly ReviewFilter[] = ['flagged', 'reviewed', 'all'];
+
+export function parseReviewFilter(value: string | null): ReviewFilter {
+  if (value === null || value === '') return 'flagged';
+  if (!(FILTERS as readonly string[]).includes(value)) throw new BadRequestError('filter must be flagged, reviewed or all');
+  return value as ReviewFilter;
+}
+
+/** Up to `n` labels by probability (ties by name), without cannot_tell and without zeros. */
+export function topLabels(probabilities: Record<string, number>, n = 3): Array<{ label: string; probability: number }> {
+  return Object.entries(probabilities)
+    .filter(([label, p]) => label !== CANNOT_TELL && typeof p === 'number' && p > 0)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, n)
+    .map(([label, probability]) => ({ label, probability }));
+}
+
+/** The columns a reviewer reads: what the task's prompts use, without the id and label columns. */
+function reviewInputColumns(task: TaskDefinition, m: RunManifest): string[] {
+  const skip = new Set([task.idColumn, m.labelColumn].filter((c): c is string => !!c));
+  const cols = requiredColumns(task).map((r) => r.column).filter((c) => !skip.has(c));
+  return cols.length ? cols : m.inputColumns.filter((c) => !skip.has(c));
+}
+
+function reviewRow(run: LoadedRun, o: FoldedOutcome, inputColumns: string[]): ReviewRow {
+  const { st, task, manifest: m } = run;
+  const rounds: RoundAnswer[] = [];
+  for (const round of [1, 2] as const) {
+    const cid = customId(o.rowId, round);
+    const res = st.results.get(cid);
+    const inFlight = st.inFlight.has(cid);
+    if (!res && !inFlight) continue;
+    const parsed = res?.ok && task ? parseWriterOutput(task, res.text ?? '') : undefined;
+    const v = st.verify.get(verifyKey(o.rowId, round));
+    const verdict = v ? asChoice(v.answers.verdict) : undefined;
+    rounds.push({
+      round,
+      model: res?.model ?? [...st.batches.values()].find((b) => b.round === round && b.customIds.includes(cid))?.model ?? '',
+      answer: parsed?.ok ? parsed.value : (res?.text ?? '').trim(),
+      valid: !!parsed?.ok,
+      error: res ? (res.ok ? (parsed && !parsed.ok ? parsed.error : null) : (res.error ?? 'failed')) : null,
+      inFlight,
+      costUsd: res?.costUsd ?? 0,
+      verify: v
+        ? {
+            verdict: verdict?.choice ?? 'cannot_tell',
+            confidence: verdict?.confidence ?? null,
+            probabilities: {
+              supported: verdict?.probabilities.supported ?? 0,
+              unsupported: verdict?.probabilities.unsupported ?? 0,
+              cannot_tell: verdict?.probabilities[CANNOT_TELL] ?? 0,
+            },
+            model: v.model,
+            costUsd: v.costUsd,
+          }
+        : null,
+    });
+  }
+  let triage: TriageInfo | null = null;
+  const tri = st.triage.get(o.rowId);
+  const triAnswer = tri ? asChoice(tri.answers.answer) : undefined;
+  if (tri && triAnswer) {
+    triage = {
+      model: tri.model,
+      choice: triAnswer.choice,
+      probability: triAnswer.probabilities[triAnswer.choice] ?? 0,
+      top: topLabels(triAnswer.probabilities),
+      cannotTell: triAnswer.probabilities[CANNOT_TELL] ?? 0,
+      costUsd: tri.costUsd,
+    };
+  }
+  const r = o.review;
+  return {
+    rowId: o.rowId,
+    status: o.status,
+    pipelineStatus: o.pipelineStatus,
+    input: Object.fromEntries(inputColumns.map((c) => [c, o.data[c] ?? ''])),
+    expected: m.labelColumn ? (o.data[m.labelColumn] ?? null) : null,
+    answer: o.answer,
+    acceptable: !!task && isValidAnswer(task, o.answer),
+    finalAnswer: o.finalAnswer,
+    verdict: o.verdict,
+    round: o.round,
+    model: o.model,
+    confidence: o.confidence,
+    costUsd: o.costUsd,
+    rounds,
+    triage,
+    review: r
+      ? {
+          action: r.action,
+          answer: r.answer,
+          previous: r.previous,
+          note: r.note ?? null,
+          at: r.at,
+          pipelineStatus: r.pipelineStatus ?? null,
+          stale: r.previous !== o.answer,
+        }
+      : null,
+  };
+}
+
+function isValidAnswer(task: TaskDefinition, answer: string): boolean {
+  if (!answer) return false;
+  try {
+    validateAnswer(task, answer);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function countsOf(s: ReviewSummary, rows: number): ReviewCounts {
+  return { rows, flagged: s.flagged, reviewed: s.reviewed, remaining: s.remaining, reviewedOther: s.reviewedOther, overridden: s.overridden };
+}
+
+const accuracyOf = (s: ReviewSummary): ReviewAccuracy | null => (s.accuracy?.of ? s.accuracy : null);
+
+/** A run whose outcomes are known, with the task loaded; otherwise a 400 that says why. */
+async function reviewableRun(runsRoot: string, runId: string): Promise<{ run: LoadedRun & { task: TaskDefinition }; review: FoldedRun }> {
+  const dir = resolveInside(runsRoot, runId);
+  if (!existsSync(join(dir, 'manifest.json'))) throw new NotFoundError(`No run ${runId}`);
+  const run = await loadRunCached(dir);
+  const review = reviewOf(run);
+  if (!run.task || !review) throw new BadRequestError(`This run cannot be reviewed: ${run.problem ?? 'its outcomes are unknown'}`);
+  return { run: run as LoadedRun & { task: TaskDefinition }, review };
+}
+
+// ---------------------------------------------------------------- GET /api/runs/:id/review
+
+export async function getReview(runsRoot: string, runId: string, filterParam: string | null, o: ApiOptions = {}): Promise<ReviewResponse> {
+  const filter = parseReviewFilter(filterParam);
+  const { run, review } = await reviewableRun(runsRoot, runId);
+  const { status } = runStatus(run, o);
+  const inputColumns = reviewInputColumns(run.task, run.manifest);
+  const keep = (f: FoldedOutcome) => (filter === 'all' ? true : filter === 'flagged' ? f.pipelineStatus === 'flagged' : f.review !== null);
+  const labels = allowedAnswers(run.task);
+  return {
+    runId: run.manifest.runId,
+    status,
+    running: status === 'running',
+    filter,
+    kind: labels ? 'closed' : 'open',
+    labels,
+    inputColumns,
+    labelColumn: run.manifest.labelColumn ?? null,
+    maxAnswerChars: MAX_ANSWER_CHARS,
+    maxNoteChars: MAX_NOTE_CHARS,
+    counts: countsOf(review.summary, run.records.length),
+    accuracy: accuracyOf(review.summary),
+    rows: review.folded.filter(keep).map((f) => reviewRow(run, f, inputColumns)),
+  };
+}
+
+// ---------------------------------------------------------------- POST /api/runs/:id/overrides
+
+/**
+ * Validates a reviewer's decision (body shape, row exists, answer allowed by the task) and appends
+ * it to overrides.jsonl, the only file this endpoint writes.
+ */
+export async function postOverride(runsRoot: string, runId: string, body: unknown, o: ApiOptions = {}): Promise<OverrideResponse> {
+  const { run } = await reviewableRun(runsRoot, runId);
+  const parsed = decisionInputSchema.safeParse(body);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    throw new BadRequestError(`Invalid decision: ${issue ? `${issue.path.join('.') || 'body'}: ${issue.message}` : 'bad body'}`);
+  }
+  const outcome = run.outcomes?.find((x) => x.rowId === parsed.data.rowId);
+  let record;
+  try {
+    record = makeOverride(parsed.data, outcome, run.task, new Date(now(o)));
+  } catch (err) {
+    if (err instanceof OverrideError) throw err.code === 'unknown_row' ? new NotFoundError(err.message) : new BadRequestError(err.message);
+    throw err;
+  }
+  appendOverride(run.dir, record);
+  const after = reviewOf(run)!; // overrides.jsonl changed size, so this re-reads it
+  const row = after.folded.find((f) => f.rowId === record.rowId)!;
+  return {
+    row: reviewRow(run, row, reviewInputColumns(run.task, run.manifest)),
+    counts: countsOf(after.summary, run.records.length),
+    accuracy: accuracyOf(after.summary),
+  };
+}
+
+// ---------------------------------------------------------------- POST /api/runs/:id/outputs
+
+/** Same as `twopass report --write`: rewrites enriched.csv and review.csv (and nothing else). */
+export async function postOutputs(runsRoot: string, runId: string, o: ApiOptions = {}): Promise<OutputsResponse> {
+  const { run } = await reviewableRun(runsRoot, runId);
+  const report = await rewriteOutputs(run.dir);
+  const summary = reviewSummary(report.folded, report.manifest.labelColumn);
+  return { written: ['enriched.csv', 'review.csv'], at: new Date(now(o)).toISOString(), counts: countsOf(summary, report.folded.length) };
 }

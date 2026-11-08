@@ -1,11 +1,13 @@
 // Creates a fake run and appends realistic ledger events over a few minutes (triage, a round-1
 // batch in flight, results, verify, round 2), holding a run.lock like a real run. Lets anyone watch
 // `twopass ui` update live without an API key and without spending money. Calls no model.
+// It ends with flagged rows (about 1 in 8) to try the review queue on.
 //
-//   node scripts/fake-live-run.ts [--runs <dir>] [--rows 120] [--speed 1]
+//   node scripts/fake-live-run.ts [--runs <dir>] [--rows 120] [--speed 1] [--instant]
 //   node src/cli.ts ui --runs <the dir it prints>
 //
-// --speed 2 runs twice as fast (default: about 4 minutes). Ctrl-C stops it and leaves a stopped run.
+// --speed 2 runs twice as fast (default: about 4 minutes). --instant writes the finished run at once
+// (for trying the review queue). Ctrl-C stops it and leaves a stopped run.
 
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync, writeFileSync } from 'node:fs';
@@ -23,10 +25,12 @@ const { values } = parseArgs({
     runs: { type: 'string' },
     rows: { type: 'string', default: '120' },
     speed: { type: 'string', default: '1' },
+    instant: { type: 'boolean', default: false },
   },
 });
 const ROWS = Math.max(10, Number(values.rows));
 const SPEED = Math.max(0.1, Number(values.speed));
+const INSTANT = values.instant === true;
 const runsRoot = resolve(values.runs ?? mkdtempSync(join(tmpdir(), 'twopass-fake-runs-')));
 
 const WRITER = 'anthropic/claude-haiku-5.5:batch';
@@ -45,13 +49,37 @@ const rand = () => {
   return seed / 0x7fffffff;
 };
 const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)]!;
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms / SPEED));
+const sleep = (ms: number) => (INSTANT ? Promise.resolve() : new Promise((r) => setTimeout(r, ms / SPEED)));
 
 const taskPath = fileURLToPath(new URL('../tasks/banking77.task.ts', import.meta.url));
+// A few made-up messages per label family, so the review page has something to read.
+const MESSAGES: Array<[string, string]> = [
+  ['card_arrival', 'I ordered my card two weeks ago and it still has not come.'],
+  ['card_delivery_estimate', 'How long does it usually take for a new card to get here?'],
+  ['lost_or_stolen_card', 'I think someone took my card from my bag at the gym.'],
+  ['compromised_card', 'There are payments on my card I did not make, is it safe?'],
+  ['exchange_rate', 'What rate do you use when I pay in euros?'],
+  ['card_payment_wrong_exchange_rate', 'The rate on my holiday purchase looks worse than it should be.'],
+  ['pending_transfer', 'My transfer has been pending since yesterday.'],
+  ['failed_transfer', 'The transfer to my landlord did not go through.'],
+  ['top_up_by_card_charge', 'Why was I charged a fee for topping up with my card?'],
+  ['pending_top_up', 'I topped up an hour ago and the money is not there yet.'],
+  ['change_pin', 'Can I set a new PIN in the app?'],
+  ['pin_blocked', 'I typed my PIN wrong three times and now it is blocked.'],
+  ['request_refund', 'I returned the shoes, how do I get my money back?'],
+  ['Refund_not_showing_up', 'The shop says they refunded me last week but I do not see it.'],
+  ['age_limit', 'Is there a minimum age to open an account?'],
+  ['atm_support', 'Which cash machines can I use with this card?'],
+];
 const records = Array.from({ length: ROWS }, (_, i) => {
-  const label = pick(BANKING77_LABELS);
-  return { id: `fake-${String(i + 1).padStart(4, '0')}`, data: { id: `fake-${i + 1}`, text: `(fake) a customer message about ${label.replace(/_/g, ' ')}`, label } };
+  const [label, text] = pick(MESSAGES);
+  return { id: `fake-${String(i + 1).padStart(4, '0')}`, data: { id: `fake-${i + 1}`, text: `(fake) ${text}`, label } };
 });
+/** A plausible second guess: the neighbouring message's label. */
+const nearLabel = (label: string) => {
+  const i = MESSAGES.findIndex(([l]) => l === label);
+  return MESSAGES[i % 2 === 0 ? i + 1 : i - 1]![0];
+};
 const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
 const runId = `${stamp}-fake-live-${randomBytes(2).toString('hex')}`;
 const manifest: RunManifest = {
@@ -78,19 +106,32 @@ writeFileSync(
   JSON.stringify({ errors: [], warnings: [{ code: 'fake', message: 'example warning from the fake run' }], changes: [], info: [] }, null, 2) + '\n',
 );
 const ledger = new Ledger(join(dir, 'ledger.jsonl'));
-const lock = acquireRunLock(dir);
+const lock = INSTANT ? { release() {} } : acquireRunLock(dir);
 
 console.log(`fake run ${runId} in ${runsRoot}`);
 console.log(`watch it:  node src/cli.ts ui --runs ${JSON.stringify(runsRoot)}`);
 console.log('(no model is called and nothing is spent; Ctrl-C leaves a stopped run you can inspect)');
 
-const choice = (choice: string, p: number) => ({
-  type: 'choice',
-  choice,
-  probabilities: { [choice]: p, cannot_tell: Math.max(0, 1 - p - 0.01) },
-  confidence: p,
-});
-const wrongLabel = (label: string) => BANKING77_LABELS.find((l) => l !== label && rand() < 0.1) ?? BANKING77_LABELS[0];
+/** Triage spread over three labels, so the review page has a round-0 top 3. */
+const triageChoice = (label: string, sure: boolean) => {
+  const near = nearLabel(label);
+  const third = pick(MESSAGES.map(([l]) => l).filter((l) => l !== label && l !== near));
+  const [top, second] = sure || rand() < 0.6 ? [label, near] : [near, label];
+  const p = sure ? 0.97 : 0.45 + rand() * 0.15;
+  const probabilities = { [top]: p, [second]: (1 - p) * 0.6, [third]: (1 - p) * 0.25, cannot_tell: (1 - p) * 0.15 };
+  return { type: 'choice', choice: top, probabilities, confidence: p };
+};
+const verdict = (choice: 'supported' | 'unsupported' | 'cannot_tell', p: number) => {
+  const rest = 1 - p;
+  const probabilities =
+    choice === 'supported'
+      ? { supported: p, unsupported: rest * 0.7, cannot_tell: rest * 0.3 }
+      : choice === 'unsupported'
+        ? { supported: rest * 0.6, unsupported: p, cannot_tell: rest * 0.4 }
+        : { supported: rest * 0.6, unsupported: rest * 0.4, cannot_tell: p };
+  return { type: 'choice', choice, probabilities, confidence: p };
+};
+const wrongLabel = (label: string) => (rand() < 0.7 ? nearLabel(label) : (BANKING77_LABELS.find((l) => l !== label && rand() < 0.1) ?? BANKING77_LABELS[0]));
 const batchId = () => `batch-${Math.floor(Date.now() / 1000)}-${randomBytes(10).toString('base64url').slice(0, 20)}`;
 
 async function decisions(rows: typeof records, stage: 'triage' | 'verify', round: 0 | 1 | 2, answer: (r: (typeof records)[number]) => Record<string, unknown>) {
@@ -148,7 +189,7 @@ try {
   // round 0: triage. About 55% of rows are clear enough to accept here.
   const sure = new Set(records.filter(() => rand() < 0.55).map((r) => r.id));
   console.log('round 0: triage');
-  await decisions(records, 'triage', 0, (r) => ({ answer: choice(r.data.label, sure.has(r.id) ? 0.97 : 0.55) }));
+  await decisions(records, 'triage', 0, (r) => ({ answer: triageChoice(r.data.label, sure.has(r.id)) }));
 
   // round 1: the rest go to the writer
   const round1 = records.filter((r) => !sure.has(r.id));
@@ -157,20 +198,23 @@ try {
   console.log('round 1: verify');
   await decisions(valid1, 'verify', 1, (r) => {
     const good = a1.get(r.id) === r.data.label;
-    return { verdict: choice(good ? 'supported' : 'unsupported', good ? 0.96 : 0.9) };
+    return { verdict: verdict(good ? 'supported' : 'unsupported', good ? 0.96 : 0.9) };
   });
   const accepted1 = new Set(valid1.filter((r) => a1.get(r.id) === r.data.label).map((r) => r.id));
 
   // round 2: whatever round 1 did not accept goes to the stronger model
   const round2 = round1.filter((r) => !accepted1.has(r.id));
-  const a2 = await batch(2, ESCALATION, round2, 60_000, 0.85);
+  const a2 = await batch(2, ESCALATION, round2, 60_000, 0.55);
   const valid2 = round2.filter((r) => BANKING77_LABELS.includes(a2.get(r.id) as never));
   console.log('round 2: verify');
   await decisions(valid2, 'verify', 2, (r) => {
     const good = a2.get(r.id) === r.data.label;
-    return { verdict: choice(good ? 'supported' : 'cannot_tell', good ? 0.95 : 0.6) };
+    // the verifier misses a few right answers too, so a reviewer has some to accept
+    if (good && rand() < 0.25) return { verdict: verdict('cannot_tell', 0.55) };
+    return { verdict: verdict(good ? 'supported' : 'cannot_tell', good ? 0.95 : 0.6) };
   });
   console.log(`done: ${runId}`);
+  console.log(`review its flagged rows:  node src/cli.ts ui --runs ${JSON.stringify(runsRoot)}   (then #/runs/${runId}/review)`);
 } finally {
   lock.release();
 }

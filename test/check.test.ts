@@ -346,7 +346,7 @@ describe('writeOutputs escaping', () => {
     writeOutputs(dir, [outcome], ['text', 'amount']);
     for (const f of ['enriched.csv', 'review.csv']) {
       const line = readFileSync(join(dir, f), 'utf8').split('\n')[1]!;
-      expect(line).toBe(`"'=HYPERLINK(""x"")",-12.5,'-cmd,0.9000,supported,m,1,0.000000,flagged`);
+      expect(line).toBe(`"'=HYPERLINK(""x"")",-12.5,'-cmd,0.9000,supported,m,1,0.000000,flagged,,'-cmd,`); // final_answer escaped too
     }
   });
 });

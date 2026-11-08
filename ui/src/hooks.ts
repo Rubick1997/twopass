@@ -95,29 +95,32 @@ export function useNow(ms = 1000): number {
 export type Route =
   | { page: 'home' }
   | { page: 'run'; id: string }
+  | { page: 'review'; id: string }
   | { page: 'bench'; id: string }
   | { page: 'notfound'; hash: string };
 
 export function parseHash(hash: string): Route {
   const path = hash.replace(/^#/, '') || '/';
   if (path === '/') return { page: 'home' };
-  const m = /^\/(runs|benches)\/([^/]+)\/?$/.exec(path);
-  if (m) {
+  const m = /^\/(runs|benches)\/([^/]+)(\/review)?\/?$/.exec(path);
+  if (m && !(m[3] && m[1] !== 'runs')) {
     let id: string;
     try {
       id = decodeURIComponent(m[2]!);
     } catch {
       return { page: 'notfound', hash };
     }
+    if (m[3]) return { page: 'review', id };
     return m[1] === 'runs' ? { page: 'run', id } : { page: 'bench', id };
   }
   return { page: 'notfound', hash };
 }
 
 export const runHref = (id: string) => `#/runs/${encodeURIComponent(id)}`;
+export const reviewHref = (id: string) => `#/runs/${encodeURIComponent(id)}/review`;
 export const benchHref = (id: string) => `#/benches/${encodeURIComponent(id)}`;
 
-/** A tiny hash router: `#/`, `#/runs/:id`, `#/benches/:id`. */
+/** A tiny hash router: `#/`, `#/runs/:id`, `#/runs/:id/review`, `#/benches/:id`. */
 export function useRoute(): Route {
   const [route, setRoute] = useState(() => parseHash(window.location.hash));
   useEffect(() => {

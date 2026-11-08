@@ -130,3 +130,51 @@ export function writeBench(root: string, benchId: string, testRuns: Record<strin
   );
   return dir;
 }
+
+/**
+ * A finished run with two flagged rows, for the review queue. Labels: r1 card_arrival, r2 age_limit,
+ * r3 atm_support, r4 card_linking.
+ *   r1  accepted in triage (right)
+ *   r2  accepted in round 1 (right)
+ *   r3  flagged after round 2 with card_linking (wrong); its triage spreads over three labels
+ *   r4  flagged after round 2 with card_linking (right, but the verifier couldn't tell)
+ * Accuracy, no human: 3 of 4.
+ */
+export function reviewRun(root: string, runId = 'run-review') {
+  const run = makeRun(root, runId);
+  const { ledger } = run;
+  const decision = (rowId: string, round: 0 | 1 | 2, answers: Record<string, unknown>, at: number) =>
+    ledger.append({
+      t: 'decision',
+      rowId,
+      round,
+      stage: round === 0 ? 'triage' : 'verify',
+      model: 'typesafe/jev-1.14-x',
+      answers: answers as never,
+      costUsd: 0.001,
+      latencyMs: 5,
+      at: iso(at),
+    });
+  const verdict = (choice: string, supported: number, unsupported: number, cannotTell: number) => ({
+    verdict: { type: 'choice', choice, probabilities: { supported, unsupported, cannot_tell: cannotTell }, confidence: 0.8 },
+  });
+  triage(ledger, 'r1', 'card_arrival', 0.97, 0);
+  triage(ledger, 'r2', 'age_limit', 0.5, 0);
+  decision(
+    'r3',
+    0,
+    { answer: { type: 'choice', choice: 'card_arrival', probabilities: { card_arrival: 0.5, atm_support: 0.3, card_linking: 0.15, age_limit: 0, cannot_tell: 0.05 }, confidence: 0.5 } },
+    0,
+  );
+  triage(ledger, 'r4', 'card_linking', 0.6, 0);
+  submit(ledger, 'batch-1', 1, WRITER, ['r2', 'r3', 'r4'], MIN);
+  results(ledger, 'batch-1', 1, WRITER, { r2: 'age_limit', r3: 'card_arrival', r4: 'age_limit' }, 5 * MIN);
+  decision('r2', 1, verdict('supported', 0.96, 0.03, 0.01), 6 * MIN);
+  decision('r3', 1, verdict('unsupported', 0.1, 0.85, 0.05), 6 * MIN);
+  decision('r4', 1, verdict('unsupported', 0.2, 0.7, 0.1), 6 * MIN);
+  submit(ledger, 'batch-2', 2, ESCALATION, ['r3', 'r4'], 7 * MIN);
+  results(ledger, 'batch-2', 2, ESCALATION, { r3: 'card_linking', r4: 'card_linking' }, 10 * MIN);
+  decision('r3', 2, verdict('unsupported', 0.2, 0.6, 0.2), 11 * MIN);
+  decision('r4', 2, verdict('cannot_tell', 0.4, 0.1, 0.5), 11 * MIN);
+  return run;
+}

@@ -13,7 +13,7 @@ import {
   share,
   thresholdText,
 } from '../format.ts';
-import { benchHref, usePoll, useNow } from '../hooks.ts';
+import { benchHref, reviewHref, usePoll, useNow } from '../hooks.ts';
 
 export function RunPage({ id }: { id: string }) {
   const run = usePoll<RunDetail>(`/api/runs/${encodeURIComponent(id)}`);
@@ -70,6 +70,18 @@ function Header({ r }: { r: RunDetail }) {
         {r.lock?.live && <span className="muted small">pid {r.lock.pid}, heartbeat {formatTime(r.lock.heartbeatAt)}</span>}
       </div>
       {r.problem && <p className="note note-error">{r.problem}</p>}
+      {r.review && r.review.flagged > 0 && (
+        <p className="review-cta">
+          <a className="button button-primary" href={reviewHref(r.runId)}>
+            {r.review.remaining
+              ? `Review ${formatCount(r.review.remaining)} flagged row${r.review.remaining === 1 ? '' : 's'}`
+              : `All ${formatCount(r.review.flagged)} flagged rows reviewed · open the review queue`}
+          </a>
+          {r.review.reviewed > 0 && r.review.remaining > 0 && (
+            <span className="muted small"> {formatCount(r.review.reviewed)} already reviewed</span>
+          )}
+        </p>
+      )}
       {r.resumeCommand && (
         <div className="resume">
           <span>Stopped with {formatCount(r.outcomes?.pending ?? 0)} rows pending. Continue with:</span>
@@ -213,7 +225,7 @@ function OutcomesCard({ r }: { r: RunDetail }) {
   const n = Math.max(r.rowCount, 1);
   const rows: Array<[string, number, string]> = [
     ['Accepted', o.accepted, `${formatCount(o.acceptedRound0)} in round 0`],
-    ['Flagged for a human', o.flagged, ''],
+    ['Flagged for a human', o.flagged, r.review?.flagged ? `${formatCount(r.review.reviewed)} reviewed, ${formatCount(r.review.remaining)} to review` : ''],
     ['Pending', o.pending, ''],
   ];
   return (

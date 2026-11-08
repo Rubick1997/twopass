@@ -87,23 +87,31 @@ export class Ledger {
 }
 
 export function parseLedger(text: string, source = 'ledger'): LedgerEvent[] {
+  return parseJsonLines(text, source) as LedgerEvent[];
+}
+
+/**
+ * Parses an append-only JSONL file. A half-written last line means the process died mid-append:
+ * that entry never happened and is skipped. Anything unparseable before the end is corruption.
+ * Shared by the ledger and overrides.jsonl.
+ */
+export function parseJsonLines(text: string, source: string): unknown[] {
   const lines = text.split('\n');
-  const events: LedgerEvent[] = [];
+  const out: unknown[] = [];
   lines.forEach((line, i) => {
     if (line.trim() === '') return;
     try {
-      events.push(JSON.parse(line) as LedgerEvent);
+      out.push(JSON.parse(line));
     } catch {
       const isLast = lines.slice(i + 1).every((l) => l.trim() === '');
-      // A half-written last line means the process died mid-append; that event never happened.
       if (!isLast) throw new Error(`${source}: line ${i + 1} is not valid JSON`);
     }
   });
-  return events;
+  return out;
 }
 
 /** Drops a half-written final line so the next append starts on a clean line. */
-function repairTornTail(path: string): void {
+export function repairTornTail(path: string): void {
   const text = readFileSync(path, 'utf8');
   if (text === '' || text.endsWith('\n')) return;
   truncateSync(path, Buffer.byteLength(text.slice(0, text.lastIndexOf('\n') + 1)));

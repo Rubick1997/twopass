@@ -4,6 +4,7 @@ import { CopyButton, ErrorNote, ModelsLine, ProgressBar, SpendVsCap, StatusBadge
 import { formatCount, formatDateTime, formatPct } from '../format.ts';
 import { runHref, usePoll, useNow } from '../hooks.ts';
 import { parseMarkdown, type Block, type Inline } from '../markdown.ts';
+import { ReviewLink } from './Home.tsx';
 
 export function BenchPage({ id }: { id: string }) {
   const bench = usePoll<BenchDetail>(`/api/benches/${encodeURIComponent(id)}`);
@@ -88,6 +89,7 @@ function ConfigCard({ c }: { c: BenchConfigSummary }) {
             </p>
           )}
           <SpendVsCap spent={r.spentUsd} cap={null} scope={null} />
+          <ReviewLink runId={r.runId} review={r.review} />
           <p>
             <a href={runHref(r.runId)}>Open run {r.runId}</a>
           </p>

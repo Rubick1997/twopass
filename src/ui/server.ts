@@ -8,19 +8,30 @@ import {
   getBalance,
   getBench,
   getBenchReport,
+  getReview,
   getRun,
   listBenches,
   listRuns,
   NotFoundError,
+  postOutputs,
+  postOverride,
   type ApiOptions,
   type BalanceCache,
 } from './api.ts';
 
-// `twopass ui`: a static app (dist/ui) plus a read-only JSON API over the runs folder.
+// `twopass ui`: a static app (dist/ui) plus a JSON API over the runs folder.
 // Only routing, headers and static files live here; the logic is in api.ts.
 // Bound to 127.0.0.1, and every request must name 127.0.0.1:<port> or localhost:<port> as its
 // Host (DNS rebinding). The OpenRouter key stays in this process: it is used for one outgoing
 // request (GET /credits) and is never written to a response or a log.
+//
+// Everything is GET/HEAD except two write endpoints for the review queue:
+//   POST /api/runs/:id/overrides   appends one line to runs/:id/overrides.jsonl
+//   POST /api/runs/:id/outputs     rewrites runs/:id/enriched.csv and review.csv
+// They also require an Origin of http://127.0.0.1:<port> or http://localhost:<port> and
+// Content-Type: application/json. Another site can't send that pair without a CORS preflight,
+// which this server never approves, so a page elsewhere can't write here (CSRF). Bodies are
+// limited to 16 KB and validated with zod. No other file in the runs folder is ever written.
 
 export interface UiServerOptions extends ApiOptions {
   runsRoot: string;
@@ -67,6 +78,42 @@ const TYPES: Record<string, string> = {
   '.txt': 'text/plain; charset=utf-8',
 };
 
+/** Largest request body the write endpoints accept. */
+export const MAX_BODY_BYTES = 16 * 1024;
+
+const WRITE_ACTIONS = ['overrides', 'outputs'] as const;
+type WriteAction = (typeof WRITE_ACTIONS)[number];
+
+/** `/api/runs/:id/overrides|outputs` → its parts; anything else → null. The id is validated later. */
+function writeRoute(path: string): { id: string; action: WriteAction } | null {
+  const m = /^\/api\/runs\/([^/]+)\/(overrides|outputs)$/.exec(path);
+  return m ? { id: decodeURIComponent(m[1]!), action: m[2] as WriteAction } : null;
+}
+
+class HttpError extends Error {
+  readonly status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+/** Reads the body up to `limit` bytes; past that, keeps draining and rejects with 413. */
+function readBody(req: IncomingMessage, limit: number): Promise<string> {
+  return new Promise((ok, fail) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let tooLarge = false;
+    req.on('data', (c: Buffer) => {
+      size += c.length;
+      if (size > limit) tooLarge = true;
+      else chunks.push(c);
+    });
+    req.on('end', () => (tooLarge ? fail(new HttpError(413, `Body larger than ${limit} bytes`)) : ok(Buffer.concat(chunks).toString('utf8'))));
+    req.on('error', fail);
+  });
+}
+
 const SECURITY_HEADERS: Record<string, string> = {
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
@@ -92,12 +139,15 @@ export function createUiHandler(o: UiServerOptions & { getPort: () => number }) 
   const json = (res: ServerResponse, status: number, value: unknown) =>
     send(res, status, JSON.stringify(value), 'application/json; charset=utf-8', { 'Cache-Control': 'no-store' });
 
-  async function routeApi(path: string, res: ServerResponse): Promise<void> {
-    const parts = path.split('/').slice(2).map((p) => decodeURIComponent(p)); // ['runs', id?, ...]
+  async function routeApi(url: URL, res: ServerResponse): Promise<void> {
+    const parts = url.pathname.split('/').slice(2).map((p) => decodeURIComponent(p)); // ['runs', id?, ...]
     const [kind, id, sub, ...rest] = parts;
     if (rest.length) throw new NotFoundError('Not found');
     if (kind === 'runs' && id === undefined) return json(res, 200, await listRuns(o.runsRoot, api));
     if (kind === 'runs' && id !== undefined && sub === undefined) return json(res, 200, await getRun(o.runsRoot, id, api));
+    if (kind === 'runs' && id !== undefined && sub === 'review') {
+      return json(res, 200, await getReview(o.runsRoot, id, url.searchParams.get('filter'), api));
+    }
     if (kind === 'benches' && id === undefined) return json(res, 200, await listBenches(o.runsRoot, api));
     if (kind === 'benches' && id !== undefined && sub === undefined) return json(res, 200, await getBench(o.runsRoot, id, api));
     if (kind === 'benches' && id !== undefined && sub === 'report') return json(res, 200, getBenchReport(o.runsRoot, id));
@@ -114,6 +164,33 @@ export function createUiHandler(o: UiServerOptions & { getPort: () => number }) 
       );
     }
     throw new NotFoundError('Not found');
+  }
+
+  /** The write endpoints. Checks run cheapest-first; the API layer validates the ID, body and row. */
+  async function routeWrite(req: IncomingMessage, res: ServerResponse, route: { id: string; action: WriteAction }, port: number) {
+    const origin = req.headers.origin;
+    if (origin !== `http://127.0.0.1:${port}` && origin !== `http://localhost:${port}`) {
+      throw new HttpError(403, 'Forbidden: writes need an Origin of this server');
+    }
+    const type = (req.headers['content-type'] ?? '').split(';')[0]!.trim().toLowerCase();
+    if (type !== 'application/json') throw new HttpError(415, 'Content-Type must be application/json');
+    const declared = Number(req.headers['content-length'] ?? 0);
+    if (declared > MAX_BODY_BYTES) {
+      res.setHeader('Connection', 'close');
+      req.resume();
+      throw new HttpError(413, `Body larger than ${MAX_BODY_BYTES} bytes`);
+    }
+    const text = await readBody(req, MAX_BODY_BYTES);
+    let body: unknown = {};
+    if (text.trim()) {
+      try {
+        body = JSON.parse(text);
+      } catch {
+        throw new HttpError(400, 'Body is not valid JSON');
+      }
+    }
+    if (route.action === 'overrides') return json(res, 200, await postOverride(o.runsRoot, route.id, body, api));
+    return json(res, 200, await postOutputs(o.runsRoot, route.id, api));
   }
 
   function serveStatic(path: string, res: ServerResponse): void {
@@ -142,15 +219,23 @@ export function createUiHandler(o: UiServerOptions & { getPort: () => number }) 
       if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) {
         return send(res, 403, 'Forbidden: unexpected Host header\n', 'text/plain; charset=utf-8');
       }
-      if (req.method !== 'GET' && req.method !== 'HEAD') {
-        return send(res, 405, 'Method not allowed\n', 'text/plain; charset=utf-8', { Allow: 'GET, HEAD' });
-      }
       const url = new URL(req.url ?? '/', `http://${host}`);
       const path = url.pathname;
       if (path.includes('\0')) return send(res, 400, 'Bad path\n', 'text/plain; charset=utf-8');
-      if (path === '/api' || path.startsWith('/api/')) return await routeApi(path, res);
+      // Matched on the raw path: an encoded "/" in the ID stays inside the ID and fails its check.
+      const write = writeRoute(path);
+      if (write) {
+        if (req.method !== 'POST') return send(res, 405, 'Method not allowed\n', 'text/plain; charset=utf-8', { Allow: 'POST' });
+        return await routeWrite(req, res, write, port);
+      }
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        return send(res, 405, 'Method not allowed\n', 'text/plain; charset=utf-8', { Allow: 'GET, HEAD' });
+      }
+      if (path === '/api' || path.startsWith('/api/')) return await routeApi(url, res);
       return serveStatic(path, res);
     } catch (err) {
+      if (!req.complete) req.resume(); // drain an unread body so the connection stays usable
+      if (err instanceof HttpError) return json(res, err.status, { error: err.message });
       if (err instanceof BadRequestError) return json(res, 400, { error: err.message });
       if (err instanceof NotFoundError) return json(res, 404, { error: err.message });
       if (err instanceof URIError) return json(res, 400, { error: 'Bad URL encoding' });
