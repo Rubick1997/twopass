@@ -5,6 +5,7 @@ import { Budget } from './budget.ts';
 import { calibrateStage, type StageCalibration } from './calibrate.ts';
 import { OpenRouterDecisionModel } from './decide/openrouter.ts';
 import { Ledger, replay, type RunState } from './ledger.ts';
+import { acquireRunLock } from './lock.ts';
 import { executePipeline, type RowOutcome } from './pipeline.ts';
 import { CheckFailedError, checkCsv, formatCheckSummary, writeCheckOutputs } from './check.ts';
 import type { FetchFn } from './http.ts';
@@ -153,6 +154,21 @@ export async function executeRun(
   }
   writeManifest(dir, manifest);
 
+  // Heartbeat for `twopass ui`. Advisory: a stale lock from a crash is simply overwritten.
+  const lock = acquireRunLock(dir);
+  try {
+    return await executeLocked(dir, manifest, records, o);
+  } finally {
+    lock.release();
+  }
+}
+
+async function executeLocked(
+  dir: string,
+  manifest: RunManifest,
+  records: ReturnType<typeof loadRun>['records'],
+  o: ExecuteOptions,
+): Promise<{ manifest: RunManifest; outcomes: RowOutcome[]; st: RunState }> {
   const task = await loadTask(manifest.taskPath);
   const ledger = new Ledger(join(dir, 'ledger.jsonl'));
   const budget = o.budget ?? new Budget(manifest.maxUsd, replay(ledger.read()).spentUsd);

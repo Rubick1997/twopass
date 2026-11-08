@@ -17,5 +17,5 @@
     "outDir": "dist",
     "noEmit": true
   },
-  "include": ["src", "tasks", "test", "scripts"]
+  "include": ["src", "tasks", "test", "scripts", "ui/vite.config.ts"]
 }

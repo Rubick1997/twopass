@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { stringify } from 'csv-stringify/sync';
 import type { RunState } from './ledger.ts';
 import type { RowOutcome } from './pipeline.ts';
+import { median } from './stats.ts';
 
 export const OUTPUT_COLUMNS = ['answer', 'confidence', 'verdict', 'model', 'round', 'cost_usd', 'status'] as const;
 
@@ -60,10 +61,6 @@ function roundTimings(st: RunState): RoundTiming[] {
   });
 }
 
-function median(sorted: number[]): number {
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
-}
 
 /** e.g. "3,080 rows · 2,710 auto-accepted at 97% precision · 312 re-run · 58 need a look · $1.94 · 41 min" */
 export function summaryLine(s: Summary): string {

@@ -50,6 +50,10 @@ const USAGE = `twopass: batch LLM work, checked row by row by a decision model
       --max-batch-rows sends batches one at a time, so OpenRouter's worst-case
       reservation (every row at max_tokens) stays within your credit balance.
 
+  twopass ui [--runs <dir>] [--port 4777] [--no-open]     no model calls, no cost
+      a local web app (127.0.0.1 only) showing every run and bench with live progress;
+      with OPENROUTER_API_KEY set it also shows your OpenRouter balance
+
   Needs OPENROUTER_API_KEY.`;
 
 const ALIAS_HELP = Object.entries(DECISION_ALIASES)
@@ -90,6 +94,8 @@ async function main(argv: string[]): Promise<number> {
       delimiter: { type: 'string' },
       out: { type: 'string' },
       json: { type: 'boolean' },
+      port: { type: 'string' },
+      'no-open': { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -229,9 +235,48 @@ async function main(argv: string[]): Promise<number> {
       if (benches.length > 1) log(`other benches: ${benches.slice(1).join(', ')}`);
       return 0;
     }
+    case 'ui':
+      return ui(runsRoot, values.port === undefined ? 4777 : toPort(values.port), !values['no-open']);
     default:
       throw new UsageError(`Unknown command "${command}"`);
   }
+}
+
+async function ui(runsRoot: string, port: number, open: boolean): Promise<number> {
+  const { startUiServer, uiIsBuilt, defaultDistDir } = await import('./ui/server.ts');
+  if (!uiIsBuilt()) {
+    console.error(`The UI is not built (${defaultDistDir()}/index.html is missing). Run: pnpm build`);
+    return 1;
+  }
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  const server = await startUiServer({ runsRoot, port, ...(apiKey ? { apiKey } : {}) });
+  console.log(`twopass ui: ${server.url}  (runs: ${runsRoot})`);
+  if (!apiKey) console.log('  OPENROUTER_API_KEY is not set: the balance card stays empty.');
+  console.log('  Ctrl-C stops it.');
+  if (open) openBrowser(server.url);
+  await new Promise<void>((done) => {
+    process.once('SIGINT', () => {
+      console.log('\nstopped');
+      void server.close().then(done);
+    });
+  });
+  return 0;
+}
+
+function openBrowser(url: string): void {
+  const [cmd, args] =
+    process.platform === 'darwin'
+      ? ['open', [url]]
+      : process.platform === 'win32'
+        ? ['cmd', ['/c', 'start', '""', url]]
+        : ['xdg-open', [url]];
+  import('node:child_process')
+    .then(({ spawn }) => {
+      const child = spawn(cmd, args, { stdio: 'ignore', detached: true });
+      child.on('error', () => console.log(`  open ${url} in your browser`));
+      child.unref();
+    })
+    .catch(() => {});
 }
 
 async function execute(
@@ -312,6 +357,11 @@ function parseDelimiter(v: string | undefined): 'auto' | Delimiter {
 const toNumber = (v: string, name: string): number => {
   const n = Number(v);
   if (!Number.isFinite(n)) throw new UsageError(`--${name} must be a number`);
+  return n;
+};
+const toPort = (v: string): number => {
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 0 || n > 65535) throw new UsageError('--port must be 0–65535');
   return n;
 };
 const toInt = (v: string, name: string): number => {

@@ -92,6 +92,30 @@ Each run writes `runs/<runId>/`:
 | `manifest.json` | Pinned model IDs, thresholds, prices, the task file's and input's hashes |
 | `normalized.csv`, `check-report.json` | The input as the run used it, and every change and warning from `check` |
 | `ledger.jsonl` | Every call and result, in order |
+| `run.lock` | Only while a process works on the run: its pid and a heartbeat (see below) |
+
+### Watching a run
+
+Batch rounds take minutes to hours. `twopass ui` opens a local page that shows every run and bench in your `runs/`
+folder, updating every 3 seconds:
+
+```bash
+pnpm build                          # once: builds the CLI and the UI
+node src/cli.ts ui                  # http://127.0.0.1:4777 [--runs <dir>] [--port <n>] [--no-open]
+```
+
+![The run monitor during round 2 of a fake run](docs-public/ui-run-monitor.png)
+
+For each run: whether it's running, finished or stopped (with the exact `resume` command to copy), progress per stage,
+every batch with its age, spend against the cap by stage, accepted / flagged / pending rows, a rough expected finish,
+and, with `OPENROUTER_API_KEY` set, your OpenRouter balance next to our estimate of the worst case OpenRouter holds for
+batches in flight. A bench shows its configurations side by side, plus its report.
+
+It reads files only: it calls no model, binds to 127.0.0.1, and never sends your key to the browser. To try it without
+a key or any spend, `node scripts/fake-live-run.ts` writes a fake run that progresses over about four minutes.
+
+A run counts as running while its `run.lock` heartbeat is fresh (under 60 s) and its process is alive. A crashed run
+leaves a stale lock behind; that's harmless, and `resume` ignores it.
 
 Coding agents: see [AGENTS.md](AGENTS.md).
 
@@ -164,7 +188,8 @@ them); Google Sheets; more than two batch rounds; automatic model selection; age
 ```bash
 pnpm test        # unit tests, HTTP mocked, no key needed
 pnpm typecheck
-pnpm build       # dist/ (npm bin)
+pnpm build       # dist/ (npm bin) and dist/ui (the local UI)
+pnpm dev:ui      # UI dev server with hot reload; run `node src/cli.ts ui --no-open` alongside for the API
 ```
 
 ## Credits

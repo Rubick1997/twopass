@@ -22,17 +22,22 @@
     "twopass": "dist/src/cli.js"
   },
   "files": [
-    "dist"
+    "dist/src",
+    "dist/tasks",
+    "dist/ui"
   ],
   "engines": {
     "node": ">=22.18"
   },
   "scripts": {
     "twopass": "node src/cli.ts",
-    "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json && vite build --config ui/vite.config.ts",
+    "build:ui": "vite build --config ui/vite.config.ts",
+    "dev:ui": "vite --config ui/vite.config.ts",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p ui/tsconfig.json",
     "test": "vitest run",
-    "fetch:banking77": "node scripts/fetch-banking77.ts"
+    "fetch:banking77": "node scripts/fetch-banking77.ts",
+    "fake-live-run": "node scripts/fake-live-run.ts"
   },
   "dependencies": {
     "csv-parse": "^7.0.3",
@@ -41,7 +46,13 @@
   },
   "devDependencies": {
     "@types/node": "22",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.2.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "typescript": "^7.0.2",
+    "vite": "^8.3.6",
     "vitest": "^5.1.0"
   }
 }

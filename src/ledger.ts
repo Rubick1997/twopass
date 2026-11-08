@@ -125,6 +125,8 @@ export interface BatchInfo extends BatchSubmittedEvent {
   finishedAt?: string;
   reportedCostUsd: number | null;
   resultCostUsd: number;
+  /** Result lines the provider returned that could not be decoded (set when the batch finishes). */
+  undecodable: number;
 }
 
 export interface RunState {
@@ -176,6 +178,7 @@ export function replay(events: LedgerEvent[]): RunState {
           finished: false,
           reportedCostUsd: null,
           resultCostUsd: 0,
+          undecodable: 0,
         });
         for (const cid of ev.customIds) s.attempts.set(cid, (s.attempts.get(cid) ?? 0) + 1);
         break;
@@ -198,6 +201,7 @@ export function replay(events: LedgerEvent[]): RunState {
         b.status = ev.status;
         b.finishedAt = ev.at;
         b.reportedCostUsd = ev.costUsd;
+        b.undecodable = ev.undecodable ?? 0;
         s.spentUsd += ev.costUsd ?? b.resultCostUsd;
         break;
       }
