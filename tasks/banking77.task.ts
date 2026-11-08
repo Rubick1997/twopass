@@ -26,7 +26,7 @@ export default defineTask({
       'You classify customer messages sent to a bank. Reply with exactly one intent label from the list below, ' +
       'written exactly as shown, and nothing else.\n\nLabels:\n' +
       BANKING77_LABELS.join('\n'),
-    // The label list (~780 tokens) is the same on every row. Cached, repeats cost 0.1x input on Haiku and 0.05x on
+    // The label list (~1,940 tokens with the instructions) is the same on every row. Cached, repeats cost 0.1x input on Haiku and 0.05x on
     // Sonnet. 1h because a batch can outlast the 5-minute cache. 20-row batch probe, 2026-11-07: 19 of 20 rows hit,
     // 74% cheaper than uncached.
     cacheSystem: '1h',

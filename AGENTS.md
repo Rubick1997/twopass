@@ -45,7 +45,7 @@ Run from the repo root with `node src/cli.ts <command>` (or `pnpm twopass <comma
 | `resume <runId>` | Continue a stopped run; nothing is repeated or paid twice | yes |
 | `report <runId> [--write]` | Summary from the ledger plus the reviewer's `overrides.jsonl`: review progress and, with labels, accuracy without and with a human. `--write` rewrites `enriched.csv` and `review.csv` from them | no |
 | `calibrate <runId> --models jev,clef,luna` | Fit thresholds on a labeled `--collect` run | yes |
-| `bench banking77 --max-usd N` | Full benchmark: downloads data, calibrates on train, runs configs on test | yes (~$20–30 full) |
+| `bench banking77 --max-usd N [--calibration file]` | Full benchmark: downloads data, calibrates on train, runs configs on test. `--calibration` reuses an existing `calibration.json` (path recorded in `bench.json` with `calibrationReused: true`, no calibration run, its spend not counted) | yes (~$20–30 full) |
 | `ui [--runs dir] [--port 4777] [--no-open]` | Local web app (127.0.0.1 only) with every run and bench, live, and the review queue for flagged rows. Needs `pnpm build` first | no (only GET `/credits` for the balance, if a key is set) |
 
 **Runs normalize their input.** `run` and `bench` call `checkCsv` (`src/check.ts`) first and refuse to start on any
@@ -174,11 +174,36 @@ Copy `tasks/banking77.task.ts`. Define `state`, the `writer` prompt with `{{colu
 `inputColumns`, so `check` can require them. Add `triage` only for closed-choice tasks. Writer and escalation
 model IDs must end in `:batch`.
 
-## Cost numbers
+## Prompt caching
 
-Each `batch_result` keeps the provider's raw `usage` and a per-row `costUsd` priced from it (cache buckets
-separately, prices pinned in the manifest). `spentUsd` and the summary's `$` use the batch total OpenRouter billed.
-`report` prints both: `cost check: per-row cost $X vs billed $Y`. A gap there means the pricing code is wrong.
+- A task opts in with `writer.cacheSystem: '5m' | '1h'`: `writerBody` sends `writer.system` as a text part with
+  `cache_control` (ttl `1h` when asked). Every writer round uses it: round 1 (Haiku), round 2 (Sonnet escalation) and
+  the baseline (Opus). Banking77 uses `'1h'`, because a batch can outlast the 5-minute cache.
+- **Anthropic caches only prefixes of 512 tokens or more and silently skips shorter ones**: no error, the usage just
+  shows no cache read or write. A short system prompt marked cacheable costs exactly what an unmarked one does. Check
+  `cached_tokens` in a probe before you count on it.
+- The usage doesn't say which TTL was written. Pricing uses the TTL the task asked for.
+- The cache is per model and prefix, not per batch or run: within the TTL, every batch and run with the same system
+  prompt reads what one of them wrote. In a bench, only the first batch per model pays the write; configs that run
+  later, or a re-run within the hour, read from the start (bench-2026-11-07-ef50: Haiku and Sonnet batches with zero
+  writes). Compare costs across configs with that in mind.
+
+## Cost numbers: computed vs billed
+
+- **Billed** is the source of truth. OpenRouter puts only a batch total on the batch (`usage.cost`), recorded on
+  `batch_finished`. `spentUsd`, the budget, the summary's `$`, `spendByStage` for finished batches and the bench report
+  all use it.
+- **Computed** is per row: each `batch_result` keeps the provider's raw `usage` and a `costUsd` priced from it with
+  `src/cost/` and the prices pinned in the manifest. `bucketsFromOpenRouter` splits `prompt_tokens` (which
+  *includes* cache reads and writes) into uncached input, cache read and cache write, and `priceUsage` prices each
+  bucket, with long-context tiers by total prompt length. Per-row costs go into `enriched.csv`, the UI's row view and
+  `spendByStage` while a batch is unfinished. Decision calls (`decision` events) carry their own billed cost.
+- `report` prints `cost check: per-row cost $X vs billed $Y over N batch(es) (±%)`. It should read +0.0%. A gap means
+  the pricing code or the pinned prices are wrong, not the bill.
+- Old manifests (before 2026-11-07) have no cache prices. A missing cache price falls back to the input price, which
+  is the old math. Old ledgers have no `usage` and keep their stored `costUsd`.
+- **Worst-case estimates use uncached prices**: the budget's pre-submit check (`estimateCost`) and the UI's reserve
+  (`batchReserve`), because OpenRouter reserves before it knows about cache hits.
 
 ## Before committing
 
