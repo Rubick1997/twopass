@@ -55,6 +55,8 @@ export interface RunListItem {
   capScope: 'run' | 'bench' | null;
   lastEventAt: string | null;
   bench: BenchRef | null;
+  /** Review progress of flagged rows; null when outcomes are unknown. */
+  review: { flagged: number; reviewed: number; remaining: number } | null;
   /** Set when status is "unknown". */
   problem?: string;
 }
@@ -199,6 +201,143 @@ export type BalanceResponse =
       reserve: Reserve;
     }
   | { available: false; reason: string; reserve: Reserve };
+
+// ---------------------------------------------------------------- review queue
+
+/** A row's pipeline status (computeOutcomes). */
+export type PipelineStatus = 'accepted' | 'flagged' | 'pending';
+/** "reviewed" once a person accepted or overrode the row. */
+export type FinalStatus = PipelineStatus | 'reviewed';
+export type ReviewFilter = 'flagged' | 'reviewed' | 'all';
+export type ReviewAction = 'accept' | 'override';
+
+export interface ReviewCounts {
+  rows: number;
+  /** Rows the pipeline flagged. */
+  flagged: number;
+  /** Flagged rows with a decision. */
+  reviewed: number;
+  /** Flagged rows without one. */
+  remaining: number;
+  /** Decided rows the pipeline had not flagged. */
+  reviewedOther: number;
+  /** Decisions that changed the answer. */
+  overridden: number;
+}
+
+export interface ReviewAccuracy {
+  noHuman: number;
+  withHuman: number;
+  correctNoHuman: number;
+  correctWithHuman: number;
+  /** Rows with a label. */
+  of: number;
+}
+
+export interface VerifyInfo {
+  /** supported | unsupported | cannot_tell */
+  verdict: string;
+  confidence: number | null;
+  probabilities: { supported: number; unsupported: number; cannot_tell: number };
+  model: string;
+  costUsd: number;
+}
+
+export interface RoundAnswer {
+  round: 1 | 2;
+  model: string;
+  /** Parsed answer, or the raw reply when it did not parse. */
+  answer: string;
+  /** The reply parsed against the task's output schema. */
+  valid: boolean;
+  error: string | null;
+  inFlight: boolean;
+  costUsd: number;
+  verify: VerifyInfo | null;
+}
+
+export interface TriageInfo {
+  model: string;
+  choice: string;
+  probability: number;
+  /** Up to 3 labels with the highest probability (cannot_tell excluded, zeros dropped). */
+  top: Array<{ label: string; probability: number }>;
+  cannotTell: number;
+  costUsd: number;
+}
+
+export interface ReviewInfo {
+  action: ReviewAction;
+  answer: string;
+  /** The pipeline's answer when the decision was made. */
+  previous: string;
+  note: string | null;
+  at: string;
+  pipelineStatus: PipelineStatus | null;
+  /** The pipeline's answer has changed since (the run was still going). */
+  stale: boolean;
+}
+
+export interface ReviewRow {
+  rowId: string;
+  status: FinalStatus;
+  pipelineStatus: PipelineStatus;
+  /** The task's input columns. */
+  input: Record<string, string>;
+  /** The label column's value, when the run has one. */
+  expected: string | null;
+  /** The pipeline's final answer. */
+  answer: string;
+  /** `answer` is a valid answer for the task, so it can be accepted as is. */
+  acceptable: boolean;
+  /** The reviewer's answer if any, else `answer`. */
+  finalAnswer: string;
+  verdict: string;
+  round: 0 | 1 | 2;
+  model: string;
+  confidence: number | null;
+  costUsd: number;
+  rounds: RoundAnswer[];
+  triage: TriageInfo | null;
+  review: ReviewInfo | null;
+}
+
+export interface ReviewResponse {
+  runId: string;
+  status: RunStatus;
+  /** The run's lock is live: new rows may still be flagged. */
+  running: boolean;
+  filter: ReviewFilter;
+  /** closed: answers come from `labels`. open: free text up to maxAnswerChars. */
+  kind: 'closed' | 'open';
+  labels: string[] | null;
+  inputColumns: string[];
+  labelColumn: string | null;
+  maxAnswerChars: number;
+  maxNoteChars: number;
+  counts: ReviewCounts;
+  accuracy: ReviewAccuracy | null;
+  rows: ReviewRow[];
+}
+
+/** POST /api/runs/:id/overrides */
+export type DecisionBody =
+  | { rowId: string; action: 'accept'; note?: string }
+  | { rowId: string; action: 'override'; answer: string; note?: string }
+  | { rowId: string; action: 'clear' };
+
+export interface OverrideResponse {
+  row: ReviewRow;
+  counts: ReviewCounts;
+  accuracy: ReviewAccuracy | null;
+}
+
+/** POST /api/runs/:id/outputs */
+export interface OutputsResponse {
+  written: string[];
+  at: string;
+  counts: ReviewCounts;
+}
 
 export interface ApiError {
   error: string;
