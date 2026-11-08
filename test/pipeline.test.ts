@@ -1,3 +1,4 @@
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -5,6 +6,7 @@ import { OpenRouterBatchProvider } from '../src/batch/openrouter.ts';
 import { Budget, BudgetExceededError } from '../src/budget.ts';
 import { OpenRouterDecisionModel } from '../src/decide/openrouter.ts';
 import { Ledger, replay } from '../src/ledger.ts';
+import { appendOverride, OVERRIDES_FILE } from '../src/overrides.ts';
 import { computeOutcomes, executePipeline, TruncatedOutputError, type PipelineContext } from '../src/pipeline.ts';
 import { defineTask } from '../src/task.ts';
 import { chatResult, mockFetch, noSleep, tempDir, type Call } from './helpers.ts';
@@ -296,5 +298,57 @@ describe('pipeline', () => {
       ['r3-r2', 'r4-r2'],
       ['r4-r2'],
     ]);
+  });
+
+  describe('resume ignores overrides.jsonl', () => {
+    const at = '2026-11-08T10:00:00.000Z';
+    /** A reviewer's file with every kind of line, including decisions on rows the pipeline hasn't finished. */
+    function writeOverrides(dir: string) {
+      for (const r of rows) appendOverride(dir, { rowId: r.id, action: 'override', answer: 'b', previous: '', at, pipelineStatus: 'pending' });
+      appendOverride(dir, { rowId: 'r2', action: 'clear', at });
+      appendOverride(dir, { rowId: 'r3', action: 'accept', answer: 'a', previous: 'a', at, pipelineStatus: 'flagged' });
+      appendFileSync(join(dir, OVERRIDES_FILE), '{"rowId":"r4","act'); // a torn last line
+      return readFileSync(join(dir, OVERRIDES_FILE), 'utf8');
+    }
+
+    it('a finished run with overrides: resume makes no call, writes nothing, and the outcomes are the pipeline\'s', async () => {
+      const dir = tempDir();
+      const thresholds = { t0: 0.9, t1: 0.9, t2: 0.999 };
+      const api = fakeOpenRouter();
+      const first = await executePipeline({ ...context(dir, api.fetch), thresholds });
+      expect(first.filter((o) => o.status === 'flagged').map((o) => o.rowId)).toEqual(['r3', 'r4']);
+      const overrides = writeOverrides(dir);
+      const ledger = readFileSync(join(dir, 'ledger.jsonl'), 'utf8');
+
+      const offline = mockFetch(() => {
+        throw new Error('no request expected');
+      });
+      const again = await executePipeline({ ...context(dir, offline.fetch), thresholds });
+      expect(offline.calls).toEqual([]);
+      expect(again).toEqual(first);
+      expect(again.some((o) => (o.status as string) === 'reviewed')).toBe(false);
+      expect(readFileSync(join(dir, 'ledger.jsonl'), 'utf8')).toBe(ledger);
+      expect(readFileSync(join(dir, OVERRIDES_FILE), 'utf8')).toBe(overrides); // not even the torn line is repaired
+    });
+
+    it('a run killed mid-batch resumes exactly as it would without overrides', async () => {
+      const resumeWith = async (withOverrides: boolean) => {
+        const dir = tempDir();
+        const first = fakeOpenRouter({ killWhen: (c) => c.method === 'GET' });
+        await expect(executePipeline(context(dir, first.fetch))).rejects.toThrow('KILLED');
+        if (withOverrides) writeOverrides(dir);
+        else writeFileSync(join(dir, 'unrelated.txt'), '');
+        const second = fakeOpenRouter();
+        for (const [id, b] of first.batches) second.batches.set(id, b);
+        const outcomes = await executePipeline(context(dir, second.fetch));
+        const requests = [...second.batches.values()].map((b) => b.requests.map((r) => r.custom_id));
+        return { counts: second.counts, outcomes: outcomes.map((o) => [o.rowId, o.status, o.answer, o.round]), requests };
+      };
+      const plain = await resumeWith(false);
+      const reviewed = await resumeWith(true);
+      expect(reviewed.counts).toEqual(plain.counts);
+      expect(reviewed.outcomes).toEqual(plain.outcomes);
+      expect(reviewed.requests.slice(-1)).toEqual(plain.requests.slice(-1)); // the same round-2 batch
+    });
   });
 });

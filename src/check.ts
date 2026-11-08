@@ -479,8 +479,8 @@ export function editDistance(a: string, b: string): number {
 
 const canonical = (s: string) => s.trim().toLowerCase().replace(/[\s-]+/g, '_').replace(/_+/g, '_');
 
-/** Allowed values when the schema is a z.enum of strings. */
-function enumOptions(schema: z.ZodType): string[] | undefined {
+/** Allowed values when the schema is a z.enum of strings (shared with overrides.ts). */
+export function enumOptions(schema: z.ZodType): string[] | undefined {
   const s = schema as unknown as { def?: { type?: string }; options?: unknown };
   if (s.def?.type !== 'enum' || !Array.isArray(s.options)) return undefined;
   return s.options.filter((o): o is string => typeof o === 'string');

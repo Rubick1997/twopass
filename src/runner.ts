@@ -10,6 +10,7 @@ import { executePipeline, type RowOutcome } from './pipeline.ts';
 import { CheckFailedError, checkCsv, formatCheckSummary, writeCheckOutputs } from './check.ts';
 import type { FetchFn } from './http.ts';
 import { fetchModelList, pricesFrom, type OpenRouterModel } from './prices.ts';
+import { foldOverrides, readOverrides } from './overrides.ts';
 import { writeOutputs } from './report.ts';
 import {
   createRunDir,
@@ -195,7 +196,9 @@ async function executeLocked(
   const st = replay(ledger.read());
   manifest.servedModels = [...new Set([...st.triage.values(), ...st.verify.values()].map((d) => d.model))].sort();
   writeManifest(dir, manifest);
-  writeOutputs(dir, outcomes, manifest.inputColumns);
+  // The pipeline above never reads overrides.jsonl. Only the output files fold in a reviewer's
+  // decisions, so a run finishing after (or during) review doesn't put reviewed rows back in review.csv.
+  writeOutputs(dir, foldOverrides(outcomes, readOverrides(dir)), manifest.inputColumns);
   return { manifest, outcomes, st };
 }
 

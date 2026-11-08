@@ -10,6 +10,7 @@ import type { Row, Thresholds } from './task.ts';
 //   normalized.csv, check-report.json   what `twopass check` changed and found in the input
 //   ledger.jsonl    everything that happened (see ledger.ts)
 //   enriched.csv, review.csv   outputs
+//   overrides.jsonl a reviewer's decisions (see overrides.ts); never read by the pipeline
 
 export interface RunManifest {
   runId: string;

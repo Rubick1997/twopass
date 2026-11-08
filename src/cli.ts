@@ -5,10 +5,10 @@ import { DECISION_ALIASES, listBenches, parseConfigs, runBench } from './bench.t
 import { BudgetExceededError } from './budget.ts';
 import { CheckFailedError, checkCsv, DELIMITERS, formatCheckSummary, writeCheckOutputs, type Delimiter } from './check.ts';
 import { NEVER, type StageCalibration } from './calibrate.ts';
-import { Ledger, replay } from './ledger.ts';
-import { BatchFailedError, computeOutcomes, TruncatedOutputError } from './pipeline.ts';
-import { summarize, summaryLine } from './report.ts';
-import { loadRun, runDir } from './run.ts';
+import { readOverrides } from './overrides.ts';
+import { BatchFailedError, TruncatedOutputError } from './pipeline.ts';
+import { loadReport, reviewLine, summarize, summaryLine, writeOutputs } from './report.ts';
+import { runDir } from './run.ts';
 import {
   calibrateRun,
   executeRun,
@@ -42,7 +42,9 @@ const USAGE = `twopass: batch LLM work, checked row by row by a decision model
       --collect              send every row through every stage (calibration data)
       --runs <dir>           where runs are kept (default ./runs)
   twopass resume <runId> [--max-usd <n>] [--allow-task-change]
-  twopass report <runId> [--label <column>]
+  twopass report <runId> [--label <column>] [--write]     no model calls, no cost
+      summary from the ledger plus the reviewer's decisions (overrides.jsonl)
+      --write                rewrite enriched.csv and review.csv from them
   twopass calibrate <runId> --models jev,clef,luna [--target 0.95] [--max-usd <n>]
   twopass bench banking77 --max-usd <n> [--configs jev,clef,luna,jev+clef]
       [--baseline <model>] [--calibration-size 1000] [--test-size <n>] [--baseline-size <n>]
@@ -94,6 +96,7 @@ async function main(argv: string[]): Promise<number> {
       delimiter: { type: 'string' },
       out: { type: 'string' },
       json: { type: 'boolean' },
+      write: { type: 'boolean' },
       port: { type: 'string' },
       'no-open': { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
@@ -171,11 +174,12 @@ async function main(argv: string[]): Promise<number> {
     case 'report': {
       if (!target) throw new UsageError('report needs <runId>');
       const dir = runDir(runsRoot, target);
-      const { manifest, records } = loadRun(dir);
-      const task = await loadTask(manifest.taskPath);
-      const st = replay(new Ledger(join(dir, 'ledger.jsonl')).read());
-      const outcomes = computeOutcomes(st, { task, rows: records, thresholds: manifest.thresholds, mode: manifest.mode });
-      printSummary(summarize(outcomes, st, values.label ?? manifest.labelColumn));
+      const { manifest, st, outcomes, overrides, folded } = await loadReport(dir);
+      printSummary(summarize(outcomes, st, values.label ?? manifest.labelColumn, overrides));
+      if (values.write) {
+        writeOutputs(dir, folded, manifest.inputColumns);
+        console.log(`wrote ${join(dir, 'enriched.csv')}, ${join(dir, 'review.csv')}`);
+      }
       return 0;
     }
     case 'calibrate': {
@@ -291,7 +295,7 @@ async function execute(
   });
   try {
     const { outcomes, st, manifest } = await executeRun(dir, { apiKey, ...o, log: (m) => console.log(m) });
-    printSummary(summarize(outcomes, st, manifest.labelColumn));
+    printSummary(summarize(outcomes, st, manifest.labelColumn, readOverrides(dir)));
     console.log(`outputs: ${join(dir, 'enriched.csv')}, ${join(dir, 'review.csv')}`);
     return 0;
   } catch (err) {
@@ -310,6 +314,8 @@ async function execute(
 
 function printSummary(s: ReturnType<typeof summarize>) {
   console.log(`\n${summaryLine(s)}`);
+  const review = reviewLine(s.review);
+  if (review) console.log(`  review: ${review}`);
   for (const r of s.rounds) {
     console.log(`  round ${r.round}: ${r.batches} batch(es), median ${r.medianMinutes.toFixed(1)} min, worst ${r.worstMinutes.toFixed(1)} min`);
   }
