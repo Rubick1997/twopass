@@ -1,7 +1,7 @@
 import type { BenchConfigSummary, BenchesResponse, RunListItem, RunsResponse } from '../../../src/ui/api-types.ts';
 import { ErrorNote, ModeTag, ModelsLine, ProgressBar, SpendVsCap, StatusBadge } from '../components.tsx';
 import { formatAgo, formatCount, formatDateTime, formatPct, formatUsd } from '../format.ts';
-import { benchHref, runHref, usePoll, useNow } from '../hooks.ts';
+import { benchHref, reviewHref, runHref, usePoll, useNow } from '../hooks.ts';
 
 export function Home() {
   const runs = usePoll<RunsResponse>('/api/runs');
@@ -145,6 +145,7 @@ function RunRow({ name, runId, run, now }: { name: string | null; runId: string;
         <span className="small muted">
           {o ? `${formatCount(done)} done (${formatPct(run.progress)}) · ${formatCount(o.accepted)} accepted · ${formatCount(o.flagged)} flagged` : (run.problem ?? '—')}
         </span>
+        <ReviewLink runId={run.runId} review={run.review} />
       </td>
       <td>
         <SpendVsCap spent={run.spentUsd} cap={run.maxUsd} scope={run.capScope} />
@@ -154,5 +155,17 @@ function RunRow({ name, runId, run, now }: { name: string | null; runId: string;
         <div className="muted">started {formatDateTime(run.createdAt)}</div>
       </td>
     </tr>
+  );
+}
+
+/** "12 to review" (or "all 40 reviewed") linking to the review queue; nothing when no row was flagged. */
+export function ReviewLink({ runId, review }: { runId: string; review: RunListItem['review'] }) {
+  if (!review || !review.flagged) return null;
+  return (
+    <div className="small">
+      <a href={reviewHref(runId)}>
+        {review.remaining ? `${formatCount(review.remaining)} to review` : `all ${formatCount(review.flagged)} reviewed`}
+      </a>
+    </div>
   );
 }
