@@ -62,6 +62,11 @@ export interface BenchOptions {
   /** Rows for the frontier baseline (default: same as the test runs). */
   baselineSize?: number;
   maxRowsPerBatch?: number;
+  /**
+   * Reuse this calibration.json instead of running calibration. The decision models are not cached and
+   * don't change, so a repeat on the same rows would only reproduce the same thresholds.
+   */
+  calibrationPath?: string;
   target: number;
   seed: number;
   id?: string;
@@ -79,8 +84,11 @@ export interface BenchState {
   baselineSize?: number | null;
   target: number;
   seed: number;
+  /** Unset when the calibration was reused: that run belongs to (and was paid by) another bench. */
   calibrationRunId?: string;
   calibrationPath?: string;
+  /** True when `calibrationPath` came from `--calibration` and no calibration ran in this bench. */
+  calibrationReused?: boolean;
   testRuns: Record<string, string>;
   /** The cost cap of the latest invocation (shared by every run in the bench). Absent in older benches. */
   maxUsd?: number;
@@ -124,6 +132,7 @@ export async function runBench(o: BenchOptions): Promise<{ benchDir: string; rep
     delete state.testRuns.baseline;
     state.baselineSize = o.baselineSize;
   }
+  if (o.calibrationPath !== undefined) reuseCalibration(state, resolve(o.calibrationPath), o.target);
   save();
 
   const budget = new Budget(o.maxUsd, spentSoFar(o.runsRoot, state));
@@ -132,8 +141,8 @@ export async function runBench(o: BenchOptions): Promise<{ benchDir: string; rep
   const decisionModels = [...new Set(state.configs.flatMap((c) => [c.triage, c.verify]))];
   const first = state.configs[0]!;
 
-  // ---- 2. calibration on a train slice
-  if (!state.calibrationRunId) {
+  // ---- 2. calibration on a train slice (skipped when --calibration reused an existing one)
+  if (!state.calibrationRunId && !state.calibrationPath) {
     const { manifest } = await startRun({
       apiKey: o.apiKey,
       runsRoot: o.runsRoot,
@@ -150,8 +159,8 @@ export async function runBench(o: BenchOptions): Promise<{ benchDir: string; rep
     state.calibrationRunId = manifest.runId;
     save();
   }
-  const calibDir = resolve(o.runsRoot, state.calibrationRunId);
   if (!state.calibrationPath) {
+    const calibDir = resolve(o.runsRoot, state.calibrationRunId!);
     o.log(`calibration: collecting on ${state.calibrationSize} train rows (${state.calibrationRunId})`);
     await executeRun(calibDir, { apiKey: o.apiKey, budget, log: prefix(o.log, 'calib') });
     const { path } = await calibrateRun(calibDir, {
@@ -165,6 +174,7 @@ export async function runBench(o: BenchOptions): Promise<{ benchDir: string; rep
     save();
   }
   const calibration = readCalibration(state.calibrationPath);
+  if (state.calibrationReused) o.log(`calibration: reusing ${state.calibrationPath} (run ${calibration.runId}), no calibration run`);
 
   // ---- 3. test runs
   const all = [...state.configs.map((c) => ({ ...c, baseline: false })), { name: 'baseline', triage: '', verify: '', baseline: true }];
@@ -220,6 +230,23 @@ export async function runBench(o: BenchOptions): Promise<{ benchDir: string; rep
   writeFileSync(reportPath, renderReport(report));
   o.log(`spent $${budget.spentUsd.toFixed(2)} of $${o.maxUsd}`);
   return { benchDir, reportPath };
+}
+
+/**
+ * Points the bench at an existing calibration.json (never modified) and checks, before anything is
+ * spent, that it has a fit for every decision model the configs need and was fitted to the same target.
+ */
+export function reuseCalibration(state: BenchState, path: string, target: number): void {
+  if (state.calibrationPath && resolve(state.calibrationPath) === path) return;
+  if (state.calibrationRunId || state.calibrationPath) {
+    throw new Error(`Bench ${state.benchId} already has a calibration (${state.calibrationPath ?? state.calibrationRunId}); --calibration can't replace it.`);
+  }
+  if (!existsSync(path)) throw new Error(`No calibration file at ${path}`);
+  const c = readCalibration(path);
+  if (c.target !== target) throw new Error(`${path} was fitted to precision ${c.target}, not ${target}. Pass --target ${c.target}.`);
+  for (const cfg of state.configs) thresholdsFromCalibration(c, cfg.triage, cfg.verify); // throws on a missing fit
+  state.calibrationPath = path;
+  state.calibrationReused = true;
 }
 
 function taskPath(): string {

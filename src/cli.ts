@@ -48,7 +48,8 @@ const USAGE = `twopass: batch LLM work, checked row by row by a decision model
   twopass calibrate <runId> --models jev,clef,luna [--target 0.95] [--max-usd <n>]
   twopass bench banking77 --max-usd <n> [--configs jev,clef,luna,jev+clef]
       [--baseline <model>] [--calibration-size 1000] [--test-size <n>] [--baseline-size <n>]
-      [--max-batch-rows <n>] [--target 0.95] [--id <benchId>]
+      [--max-batch-rows <n>] [--target 0.95] [--id <benchId>] [--calibration <file>]
+      --calibration reuses an existing calibration.json and skips the calibration run
       --max-batch-rows sends batches one at a time, so OpenRouter's worst-case
       reservation (every row at max_tokens) stays within your credit balance.
 
@@ -229,6 +230,7 @@ async function main(argv: string[]): Promise<number> {
         ...(values['test-size'] ? { testSize: toInt(values['test-size'], 'test-size') } : {}),
         ...(values['baseline-size'] ? { baselineSize: toInt(values['baseline-size'], 'baseline-size') } : {}),
         ...(values['max-batch-rows'] ? { maxRowsPerBatch: toInt(values['max-batch-rows'], 'max-batch-rows') } : {}),
+        ...(values.calibration ? { calibrationPath: values.calibration } : {}),
         target: values.target ? toNumber(values.target, 'target') : 0.95,
         seed: toInt(values.seed ?? '11', 'seed'),
         ...(values.id ? { id: values.id } : {}),
