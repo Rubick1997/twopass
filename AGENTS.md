@@ -43,10 +43,10 @@ Run from the repo root with `node src/cli.ts <command>` (or `pnpm twopass <comma
 | `check <csv> --task <file> [--label col] [--delimiter auto\|,\|;\|tab\|pipe] [--out dir] [--json]` | Validate the CSV against the task; write `normalized.csv` + `check-report.json` (default `runs/checks/…`). Exit 1 on errors | no (only GET `/models`) |
 | `run <csv> --task <file> [--sample N] [--label col] [--max-usd N]` | New run in `runs/<runId>/` | yes |
 | `resume <runId>` | Continue a stopped run; nothing is repeated or paid twice | yes |
-| `report <runId>` | Summary line from the ledger | no |
+| `report <runId> [--write]` | Summary from the ledger plus the reviewer's `overrides.jsonl`: review progress and, with labels, accuracy without and with a human. `--write` rewrites `enriched.csv` and `review.csv` from them | no |
 | `calibrate <runId> --models jev,clef,luna` | Fit thresholds on a labeled `--collect` run | yes |
 | `bench banking77 --max-usd N` | Full benchmark: downloads data, calibrates on train, runs configs on test | yes (~$20–30 full) |
-| `ui [--runs dir] [--port 4777] [--no-open]` | Local web app (127.0.0.1 only) with every run and bench, live. Needs `pnpm build` first | no (only GET `/credits` for the balance, if a key is set) |
+| `ui [--runs dir] [--port 4777] [--no-open]` | Local web app (127.0.0.1 only) with every run and bench, live, and the review queue for flagged rows. Needs `pnpm build` first | no (only GET `/credits` for the balance, if a key is set) |
 
 **Runs normalize their input.** `run` and `bench` call `checkCsv` (`src/check.ts`) first and refuse to start on any
 error. Everything except the context-length check runs before any network call; that check needs one GET `/models`,
@@ -67,17 +67,30 @@ If the OpenRouter balance is low, add `--max-batch-rows 500` (see "Provider rule
 pnpm build                                # TS + the app (Vite + React) into dist/ui
 node src/cli.ts ui                        # http://127.0.0.1:4777, opens the browser
 node scripts/fake-live-run.ts             # a fake run that updates for ~4 min; no key, no cost
+node scripts/fake-live-run.ts --instant   # the same run, finished at once, with flagged rows to review
 pnpm dev:ui                               # Vite dev server; proxies /api to a running `ui --no-open` on 4777
 ```
 
 - `src/ui/api.ts` holds all the logic as pure functions (runs folder in, plain objects out); `server.ts` only routes,
   sets headers and serves `dist/ui`. Response types live once in `src/ui/api-types.ts`, imported type-only by the app.
-- The server is **read-only**, binds to `127.0.0.1`, rejects any `Host` other than `127.0.0.1:<port>` /
-  `localhost:<port>`, and validates IDs against `^[A-Za-z0-9_.-]+$` plus a resolved-path check. The OpenRouter key stays
-  in the server process and is never sent to the browser or logged (a test searches every response for it).
+- The server binds to `127.0.0.1`, rejects any `Host` other than `127.0.0.1:<port>` / `localhost:<port>`, and validates
+  IDs against `^[A-Za-z0-9_.-]+$` plus a resolved-path check. The OpenRouter key stays in the server process and is never
+  sent to the browser or logged (a test searches every response for it).
+- **Write endpoints.** Everything is GET/HEAD (405 otherwise) except exactly two routes, which are POST only:
+  `POST /api/runs/:id/overrides` (appends one line to `overrides.jsonl`) and `POST /api/runs/:id/outputs` (rewrites
+  `enriched.csv` and `review.csv`, same as `report --write`). Both also require `Origin` to be exactly
+  `http://127.0.0.1:<port>` or `http://localhost:<port>` (403) and `Content-Type: application/json` (415): another site
+  can't send that pair without a CORS preflight, which the server never approves, so this is the CSRF protection. Bodies
+  are capped at 16 KB (413), parsed as JSON (400) and validated with zod (`decisionInputSchema`, strict: 400); the row must
+  exist in the run (404) and an override must be allowed by the task (400). The server writes no other file in `runs/`,
+  and never opens a `Ledger` (that would repair a torn tail a live run may be writing). Add a test for every new
+  rejection. A new write endpoint needs the same checks; put it in `writeRoute()` in `server.ts`.
 - No model calls in the UI or server. The only outgoing request is `GET /api/v1/credits`, cached 30 s.
 - React and Vite are devDependencies: users of the CLI install no frontend runtime.
 - Spend by stage comes from `spendByStage` in `src/stats.ts`, shared with the bench report. Don't compute it anywhere else.
+
+**The review queue** (`#/runs/:id/review`, `GET /api/runs/:id/review?filter=flagged|reviewed|all`) is built from
+`computeOutcomes` plus `foldOverrides`; the keyboard map and optimistic-update maths are pure helpers in `ui/src/review.ts`.
 
 **The run lock.** `executeRun` writes `runs/<id>/run.lock` (`{ pid, startedAt, heartbeatAt }`), refreshes the heartbeat
 every 15 s, and removes it on normal exit, on errors and on SIGINT. A run counts as *running* only if the heartbeat is
@@ -93,6 +106,8 @@ src/
   runner.ts         start / execute / calibrate a run (shared by cli and bench)
   pipeline.ts       the rounds; normal | collect | baseline modes; computeOutcomes (pure)
   ledger.ts         append-only JSONL event log + replay() → RunState
+  overrides.ts      the reviewer's decisions (overrides.jsonl): read, append, validate, foldOverrides (pure)
+  report.ts         summary, review summary and accuracy, enriched.csv / review.csv
   batch/            BatchProvider interface + OpenRouter Batch API client
   decide/           DecisionModel interface + OpenRouter Decisions API client
   task.ts           task definition (prompt, schema, verify question, models, thresholds)
@@ -118,6 +133,15 @@ runs/  data/        local only, gitignored
   A test kills the pipeline mid-batch and mid-verify. Keep it passing.
 - **`computeOutcomes` is pure.** Outcomes are derived from the ledger and thresholds, never stored. That lets a `collect`
   run be replayed under any thresholds (calibration, the results explorer).
+- **Human decisions live in `runs/<id>/overrides.jsonl`, never in the ledger.** One JSON line per decision
+  (`{rowId, action: accept|override|clear, answer, previous, note?, at, pipelineStatus}`), appended synchronously, last line
+  per row wins, undo appends `clear`; a torn last line is skipped on read and repaired before the next append (the
+  ledger's helpers). `foldOverrides(outcomes, overrides)` applies them on top of `computeOutcomes` and gives decided rows
+  the status `reviewed`, so a human answer is never counted as one the pipeline accepted. **`resume` ignores the file
+  completely**: the pipeline never reads it (tests check calls, ledger and outcomes are identical with and without it).
+  Only the output files a run writes when it ends fold it in. Overrides are validated against the task: a closed-choice
+  answer must be in the output schema's enum (`enumOptions`, as `check` reads it), an open one non-empty and at most
+  2,000 characters.
 - **Every decision `choice` question includes `cannot_tell`.** It's enforced in `assertHasCannotTell`.
 - **Thresholds come from `calibrate` on held-out data**, never from vendor defaults. `1.01` (`NEVER`) means the stage never
   auto-accepts.

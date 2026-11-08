@@ -87,8 +87,9 @@ Each run writes `runs/<runId>/`:
 
 | File | What it holds |
 |---|---|
-| `enriched.csv` | Your columns plus `answer, confidence, verdict, model, round, cost_usd, status` |
-| `review.csv` | Only the flagged rows |
+| `enriched.csv` | Your columns plus `answer, confidence, verdict, model, round, cost_usd, status`, and from review: `reviewed_by_human` (`accepted` / `overridden`), `final_answer` (yours where you decided, else the pipeline's) and `review_note`. `answer` stays the pipeline's |
+| `review.csv` | Only the flagged rows nobody has reviewed yet |
+| `overrides.jsonl` | Your review decisions, one line each (see below). Never part of the ledger |
 | `manifest.json` | Pinned model IDs, thresholds, prices, the task file's and input's hashes |
 | `normalized.csv`, `check-report.json` | The input as the run used it, and every change and warning from `check` |
 | `ledger.jsonl` | Every call and result, in order |
@@ -111,11 +112,60 @@ every batch with its age, spend against the cap by stage, accepted / flagged / p
 and, with `OPENROUTER_API_KEY` set, your OpenRouter balance next to our estimate of the worst case OpenRouter holds for
 batches in flight. A bench shows its configurations side by side, plus its report.
 
-It reads files only: it calls no model, binds to 127.0.0.1, and never sends your key to the browser. To try it without
+It calls no model, binds to 127.0.0.1, and never sends your key to the browser. Apart from review decisions (below), it
+only reads files. To try it without
 a key or any spend, `node scripts/fake-live-run.ts` writes a fake run that progresses over about four minutes.
 
 A run counts as running while its `run.lock` heartbeat is fresh (under 60 s) and its process is alive. A crashed run
 leaves a stale lock behind; that's harmless, and `resume` ignores it.
+
+### Reviewing flagged rows
+
+Rows the pipeline can't vouch for are flagged for a person. Open a run in `twopass ui` and choose **Review N flagged
+rows** (also linked from the run list), or go to `#/runs/<runId>/review`:
+
+![The review queue on a fake run: the row list, the current row's message, the pipeline's answer and the round-0 top 3](docs-public/ui-review-queue.png)
+
+For each row you see the input, the pipeline's answer, every round's answer with the verifier's verdict and
+probabilities, and the decision model's round-0 top 3. The expected label, when the run has one, stays hidden until you
+press `l`, so it doesn't bias you. It's built for the keyboard:
+
+| Key | |
+|---|---|
+| `j` / `k` | next / previous row |
+| `a` | accept the pipeline's answer |
+| `o` | override: type to filter the labels, arrows and Enter to pick |
+| `1`–`3` | pick one of the round-0 top 3 |
+| `u` | undo the decision on this row |
+| `n` | add a note |
+| `f` | switch between flagged, reviewed and all rows |
+| `?` | all shortcuts |
+
+After each decision the next unreviewed row opens. With a label column, the page shows **accuracy, no human → with a
+human** as you go. You can also change a row the pipeline accepted (switch to "all rows"); the record says so.
+
+Each decision is one line appended to `runs/<runId>/overrides.jsonl`:
+
+```json
+{"rowId":"test-00276","action":"override","answer":"fiat_currency_support","previous":"exchange_via_app","at":"2026-11-08T20:56:39.120Z","pipelineStatus":"flagged"}
+```
+
+The last line for a row wins, and undo appends `{"action":"clear"}`, so nothing is ever edited in place. Answers are
+checked against the task (one of its labels, or non-empty text for open-ended tasks). The file is never mixed into the
+ledger, and `resume` ignores it, so the pipeline's own numbers don't change. Reviewed rows get the status `reviewed`,
+never `accepted`.
+
+```bash
+node src/cli.ts report <runId>            # adds: 10 of 78 flagged rows reviewed … accuracy, no human 94.2% → with a human 94.2%
+node src/cli.ts report <runId> --write    # rewrites enriched.csv and review.csv with your decisions (no model call)
+```
+
+The page's **Write output files** button does the same as `--write`. To try it without a key: `node scripts/fake-live-run.ts
+--instant` writes a finished fake run with flagged rows.
+
+The UI server writes only these files: `overrides.jsonl`, `enriched.csv` and `review.csv`. Its two write endpoints accept
+only JSON requests from its own page (exact `Origin` and `Content-Type: application/json`, up to 16 KB), so another website
+open in your browser can't write to them.
 
 Coding agents: see [AGENTS.md](AGENTS.md).
 
