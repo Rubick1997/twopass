@@ -10,6 +10,8 @@ export type StageSpend = Record<SpendStage | 'total', number>;
  * Money spent per stage, in USD. A batch counts the provider-reported total when there is one,
  * otherwise the sum of its rows collected so far (the same rule `replay` uses for `spentUsd`).
  * `total` is the ledger's `spentUsd`, which counts a batch only once it has finished.
+ * Row sums use each `batch_result`'s `costUsd`, which `collectBatch` prices from the raw usage with
+ * cache reads and writes separated (src/cost/); the billed total stays the source of truth.
  */
 export function spendByStage(st: RunState): StageSpend {
   const cost: StageSpend = { triage: 0, write1: 0, verify1: 0, write2: 0, verify2: 0, total: 0 };

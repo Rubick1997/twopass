@@ -1,3 +1,5 @@
+import { copyFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { priceUsage, tierFor, type ModelPrice } from '../src/cost/price.ts';
@@ -7,6 +9,11 @@ import { computedRowCost, writerBody } from '../src/pipeline.ts';
 import { defineTask } from '../src/task.ts';
 import { pricesFrom, type OpenRouterModel } from '../src/prices.ts';
 import { costCheck, costCheckLine } from '../src/report.ts';
+import { loadRun } from '../src/run.ts';
+import { spendByStage } from '../src/stats.ts';
+import { loadTask } from '../src/task.ts';
+import { batchReserve } from '../src/ui/api.ts';
+import { tempDir } from './helpers.ts';
 
 // Live OpenRouter pricing for anthropic/claude-haiku-5.5 (sync), 2026-11-06.
 const haikuListing = {
@@ -123,5 +130,72 @@ describe('cacheable system prompt', () => {
   it('sends a plain string otherwise', () => {
     const task = defineTask({ ...base, writer });
     expect(writerBody(task, { text: 'hi' }, 1, replay([]), 'r1', 'normal').messages[0]).toEqual({ role: 'system', content: 'LABELS' });
+  });
+});
+
+describe('cacheable system prompt in every writer round', () => {
+  const task = defineTask({
+    name: 't',
+    state: (row: Record<string, string>) => row.text ?? '',
+    verify: { instructions: '?', state: () => ({}) },
+    models: { writer: 'w:batch', escalation: 's:batch', decision: 'd' },
+    writer: {
+      system: 'LABELS',
+      promptTemplate: '{{text}}',
+      maxTokens: 5,
+      outputSchema: z.string(),
+      cacheSystem: '1h',
+      escalation: { template: '{{text}} / {{previous_answer}}', maxTokens: 50 },
+    },
+  });
+  const cached = { role: 'system', content: [{ type: 'text', text: 'LABELS', cache_control: { type: 'ephemeral', ttl: '1h' } }] };
+
+  it('marks it cacheable for the escalation round (Sonnet) and the baseline (Opus), not only round 1', () => {
+    expect(writerBody(task, { text: 'hi' }, 2, replay([]), 'r1', 'normal').messages[0]).toEqual(cached);
+    expect(writerBody(task, { text: 'hi' }, 1, replay([]), 'r1', 'baseline').messages[0]).toEqual(cached);
+  });
+});
+
+describe('spend by stage', () => {
+  const at = '2026-11-07T00:00:00Z';
+  const hitCost = computedRowCost({ inputTokens: 801, outputTokens: 7, usage: cacheHitCall.usage }, haiku, '1h');
+  const events: LedgerEvent[] = [
+    { t: 'batch_submitted', batchId: 'b1', round: 1, model: 'w', customIds: ['a-r1', 'b-r1'], at } as LedgerEvent,
+    ...['a', 'b'].map(
+      (id) =>
+        ({ t: 'batch_result', batchId: 'b1', round: 1, model: 'w', customId: `${id}-r1`, rowId: id, ok: true, inputTokens: 801, outputTokens: 7, usage: cacheHitCall.usage, costUsd: hitCost, at }) as LedgerEvent,
+    ),
+  ];
+
+  it('sums the cache-aware per-row cost while a batch is unfinished, then uses the billed total', () => {
+    expect(hitCost).toBeCloseTo(cacheHitCall.billed, 7);
+    expect(spendByStage(replay(events)).write1).toBeCloseTo(2 * hitCost, 12);
+    const finished = replay([...events, { t: 'batch_finished', batchId: 'b1', status: 'completed', costUsd: 0.00002626, undecodable: 0, at } as LedgerEvent]);
+    expect(spendByStage(finished)).toMatchObject({ write1: 0.00002626, total: 0.00002626 });
+  });
+});
+
+describe('a manifest from before cache prices (fixture, 2026-11-06)', () => {
+  function oldRun() {
+    const dir = tempDir();
+    copyFileSync('test/fixtures/manifest-2026-11-06.json', join(dir, 'manifest.json'));
+    writeFileSync(join(dir, 'rows.jsonl'), '');
+    return loadRun(dir);
+  }
+  const opus = 'anthropic/claude-opus-5.5:batch';
+
+  it('loads, and prices cached tokens at the plain input price as before', () => {
+    const { manifest } = oldRun();
+    expect(manifest.prices[opus]).toEqual({ inputPerToken: 0.000002, outputPerToken: 0.00001 });
+    const line = { inputTokens: 801, outputTokens: 7, usage: cacheHitCall.usage };
+    expect(computedRowCost(line, manifest.prices[opus]!, '1h')).toBeCloseTo(801 * 0.000002 + 7 * 0.00001, 12);
+    expect(computedRowCost({ inputTokens: 801, outputTokens: 7 }, manifest.prices[opus]!, '1h')).toBeCloseTo(801 * 0.000002 + 7 * 0.00001, 12);
+  });
+
+  it('still gives the UI a reserve estimate', async () => {
+    const { manifest, records } = oldRun();
+    const task = await loadTask('tasks/banking77.task.ts');
+    const reserve = batchReserve({ manifest, records, task, st: replay([]) }, 1, opus, ['a-r1', 'b-r1']);
+    expect(reserve).toBeGreaterThan(2 * 1024 * 0.00001); // two rows at max_tokens, plus input
   });
 });

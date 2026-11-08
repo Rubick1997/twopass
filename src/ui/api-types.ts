@@ -127,7 +127,18 @@ export interface RunDetail extends RunListItem {
     labelColumn: string | null;
     thresholds: { t0: number; t1: number; t2: number };
     thresholdsSource: string;
-    prices: Record<string, { inputPerToken: number; outputPerToken: number }>;
+    /** Pinned per-token prices (ModelPrice in src/cost/price.ts). Cache fields are absent in manifests before 2026-11-07. */
+    prices: Record<
+      string,
+      {
+        inputPerToken: number;
+        outputPerToken: number;
+        cacheReadPerToken?: number;
+        cacheWritePerToken?: number;
+        cacheWrite1hPerToken?: number;
+        overrides?: Array<{ minPromptTokens: number; inputPerToken: number; outputPerToken: number }>;
+      }
+    >;
     servedModels: string[];
   };
   check: { warnings: number; errors: number; changes: number } | null;
