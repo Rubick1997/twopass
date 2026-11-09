@@ -1,17 +1,17 @@
 import { useEffect, useRef } from 'react';
 import { useRoute } from './hooks.ts';
 import { BenchPage } from './pages/Bench.tsx';
+import { ExplorePage } from './pages/Explore.tsx';
 import { Home } from './pages/Home.tsx';
 import { ReviewPage } from './pages/Review.tsx';
 import { RunPage } from './pages/Run.tsx';
 
-// App shell: skip link, header, one <main> per route. The results explorer (a later piece) adds a
-// route here and reuses usePoll, the components and the API types.
+// App shell: skip link, header, one <main> per route.
 
 export function App() {
   const route = useRoute();
   const main = useRef<HTMLElement>(null);
-  const key = route.page === 'run' || route.page === 'bench' || route.page === 'review' ? `${route.page}:${route.id}` : route.page;
+  const key = route.page === 'run' || route.page === 'bench' || route.page === 'review' || route.page === 'explore' ? `${route.page}:${route.id}` : route.page;
 
   // On navigation (not on refresh): back to the top, focus moves to the page for screen readers.
   const first = useRef(true);
@@ -28,6 +28,8 @@ export function App() {
     document.title =
       route.page === 'review'
         ? `Review ${route.id} · TwoPass`
+        : route.page === 'explore'
+          ? `Explore ${route.id} · TwoPass`
         : route.page === 'run' ? `${route.id} · TwoPass` : route.page === 'bench' ? `${route.id} · TwoPass` : 'TwoPass · runs';
   }, [route]);
 
@@ -50,6 +52,7 @@ export function App() {
         {route.page === 'run' && <RunPage id={route.id} />}
         {route.page === 'review' && <ReviewPage id={route.id} />}
         {route.page === 'bench' && <BenchPage id={route.id} />}
+        {route.page === 'explore' && <ExplorePage id={route.id} />}
         {route.page === 'notfound' && (
           <>
             <h1>Page not found</h1>

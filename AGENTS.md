@@ -92,6 +92,14 @@ pnpm dev:ui                               # Vite dev server; proxies /api to a r
 **The review queue** (`#/runs/:id/review`, `GET /api/runs/:id/review?filter=flagged|reviewed|all`) is built from
 `computeOutcomes` plus `foldOverrides`; the keyboard map and optimistic-update maths are pure helpers in `ui/src/review.ts`.
 
+**The results explorer** (`#/benches/:id/explore`, linked from the bench page; `GET /api/benches/:id/explore` →
+`getBenchExplore` in `api.ts`) shows the test-split table and reliability from `bench-report.json`, plus a slider replay of the
+bench's *calibration run* (a `collect` run on held-out train rows; found through `calibrationRunId`, or the `runId` inside
+`calibrationPath` for a reused calibration; without the folder, `calibration: null` and a reason). The replay is `ui/src/explore.ts`
+(pure, runs in the browser) over compact `ExploreRow`s, and **must stay equivalent to `computeOutcomes`**: `test/ui-explore.test.ts`
+replays a fixture ledger both ways. Pricing-note rule: if the calibration run's `batch_result`s carry no `usage`, its writer costs
+were recorded without prompt caching, so `pricingNote` is set and the page prints it next to every cost figure in the explorer.
+
 **The run lock.** `executeRun` writes `runs/<id>/run.lock` (`{ pid, startedAt, heartbeatAt }`), refreshes the heartbeat
 every 15 s, and removes it on normal exit, on errors and on SIGINT. A run counts as *running* only if the heartbeat is
 under 60 s old and the pid is alive. The lock is advisory: nothing refuses to start because of it, so a crash (which
@@ -121,6 +129,8 @@ src/
   datasets/         Banking77 download
 tasks/              task files (banking77.task.ts)
 ui/                 the browser app (Vite + React, own tsconfig), built to dist/ui
+  ui/src/explore.ts        threshold replay for the results explorer (pure; equivalent to computeOutcomes)
+  ui/src/pages/Explore.tsx results explorer page (inline SVG charts, no chart library)
 scripts/            dataset fetch, contamination check, fake-live-run.ts (UI demo, no cost)
 test/               vitest, HTTP mocked through test/helpers.ts
 docs-public/        images for the README (docs/ is local-only and gitignored)

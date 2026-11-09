@@ -986,3 +986,266 @@ table.rounds td.answer-cell {
     gap: 0;
   }
 }
+
+/* results explorer: categorical slots 1-5 of the validated palette, stepped for each surface */
+:root {
+  --s1: #2a78d6;
+  --s2: #eb6834;
+  --s3: #1baf7a;
+  --s4: #eda100;
+  --s5: #e87ba4;
+  --grid: #e4e7ec;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --s1: #3987e5;
+    --s2: #d95926;
+    --s3: #199e70;
+    --s4: #c98500;
+    --s5: #d55181;
+    --grid: #2a2f37;
+  }
+}
+
+.card.viz {
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.viz .chart {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.chart:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.chart .ax,
+.chart .ax-strong,
+.chart .ax-s {
+  fill: var(--muted);
+  font-size: 12px;
+}
+
+.chart .ax-strong {
+  fill: var(--text);
+  font-weight: 600;
+}
+
+.chart .ax-s {
+  font-size: 10px;
+}
+
+.chart .grid {
+  stroke: var(--grid);
+  stroke-width: 1;
+}
+
+.chart .target {
+  stroke: var(--muted);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 4;
+}
+
+.chart .cursor {
+  stroke: var(--muted);
+  stroke-width: 1;
+}
+
+rect.s1 { fill: var(--s1); }
+rect.s2 { fill: var(--s2); }
+rect.s3 { fill: var(--s3); }
+rect.s4 { fill: var(--s4); }
+rect.s5 { fill: var(--s5); }
+
+.chart .line,
+.legend .line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.legend .line.s0 { stroke: var(--muted); }
+.line.s1 { stroke: var(--s1); }
+.line.s2 { stroke: var(--s2); }
+.line.s3 { stroke: var(--s3); }
+.line.s4 { stroke: var(--s4); }
+.line.s5 { stroke: var(--s5); }
+.chart .line.dim { opacity: 0.55; }
+
+.chart .mark-cal {
+  fill: var(--surface);
+  stroke: var(--text);
+  stroke-width: 2;
+}
+
+.chart .mark-cur {
+  fill: var(--text);
+  stroke: var(--surface);
+  stroke-width: 2;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  list-style: none;
+  padding: 0;
+  margin: 0 0 8px;
+  font-size: 0.85rem;
+}
+
+.legend li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.controls,
+.sliders {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  margin-bottom: 12px;
+}
+
+.controls label,
+.slider label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.controls select {
+  font: inherit;
+  padding: 6px 8px;
+  min-width: 160px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.slider {
+  flex: 1 1 260px;
+}
+
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.slider input[type='range'] {
+  flex: 1;
+  accent-color: var(--accent);
+  min-height: 28px;
+}
+
+.slider-value {
+  min-width: 3.2em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.tile {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+}
+
+.tile-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.tile-value {
+  font-size: 1.5rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-key,
+.readout {
+  margin: 8px 0;
+}
+
+.readout {
+  min-height: 1.5em;
+}
+
+.rel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 16px;
+}
+
+.rel {
+  margin: 0;
+}
+
+.rel .frame {
+  fill: none;
+  stroke: var(--grid);
+}
+
+.rel .diag {
+  stroke: var(--muted);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.rel .rel-line {
+  fill: none;
+  stroke-width: 1.5;
+}
+
+.rel .rel-line.raw,
+.dot-raw {
+  stroke: var(--s2);
+}
+
+.rel .rel-line.cal,
+.dot-cal {
+  stroke: var(--s1);
+}
+
+.dot-raw {
+  fill: var(--surface);
+  stroke-width: 2;
+}
+
+.dot-cal {
+  fill: var(--s1);
+  stroke: var(--surface);
+  stroke-width: 2;
+}
+
+.btn {
+  font: inherit;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

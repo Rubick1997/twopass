@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from 'react';
 import type { BenchConfigSummary, BenchDetail, BenchReportResponse } from '../../../src/ui/api-types.ts';
 import { CopyButton, ErrorNote, ModelsLine, ProgressBar, SpendVsCap, StatusBadge } from '../components.tsx';
 import { formatCount, formatDateTime, formatPct } from '../format.ts';
-import { runHref, usePoll, useNow } from '../hooks.ts';
+import { exploreHref, runHref, usePoll, useNow } from '../hooks.ts';
 import { parseMarkdown, type Block, type Inline } from '../markdown.ts';
 import { ReviewLink } from './Home.tsx';
 
@@ -30,6 +30,11 @@ export function BenchPage({ id }: { id: string }) {
       </div>
       <ErrorNote error={bench.error} />
       <SpendVsCap spent={b.spentUsd} cap={b.maxUsd} scope="run" />
+      {b.hasReport && (
+        <p>
+          <a href={exploreHref(b.benchId)}>Explore results: thresholds, accuracy at coverage, reliability</a>
+        </p>
+      )}
       {b.resumeCommand && (
         <div className="resume">
           <span>Stopped. Continue with:</span>
