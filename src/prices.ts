@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { authHeaders, requestJson, type FetchFn, type RetryOptions } from './http.ts';
+import type { TokenPrices } from './cost/price.ts';
 import type { Prices } from './pipeline.ts';
 
 const modelsSchema = z.looseObject({
@@ -7,7 +8,16 @@ const modelsSchema = z.looseObject({
     z.looseObject({
       id: z.string(),
       context_length: z.number().nullish(),
-      pricing: z.looseObject({ prompt: z.string(), completion: z.string() }),
+      pricing: z.looseObject({
+        prompt: z.string(),
+        completion: z.string(),
+        input_cache_read: z.string().optional(),
+        input_cache_write: z.string().optional(),
+        input_cache_write_1h: z.string().optional(),
+        // Several shapes exist: prompt-length tiers (min_prompt_tokens) and time-of-day prices (utc_start,
+        // utc_end, utc_days). Anything not understood must not break the model list.
+        overrides: z.array(z.looseObject({})).optional(),
+      }),
     }),
   ),
 });
@@ -40,7 +50,29 @@ export function pricesFrom(models: OpenRouterModel[], ids: string[]): Prices {
   for (const id of ids) {
     const m = models.find((x) => x.id === id);
     if (!m) throw new Error(`Model ${id} is not listed on OpenRouter. Batch models need the ":batch" suffix.`);
-    prices[id] = { inputPerToken: Number(m.pricing.prompt), outputPerToken: Number(m.pricing.completion) };
+    const p = m.pricing;
+    // Only prompt-length tiers are used. Time-of-day overrides are ignored: none of the models TwoPass runs has them.
+    const overrides = (p.overrides ?? []).flatMap((o) =>
+      typeof o.min_prompt_tokens === 'number' && !Object.keys(o).some((k) => k.startsWith('utc_'))
+        ? [{ minPromptTokens: o.min_prompt_tokens, ...tokenPrices({ ...p, ...o }) }]
+        : [],
+    );
+    prices[id] = { ...tokenPrices(p), ...(overrides.length ? { overrides } : {}) };
   }
   return prices;
+}
+
+/** An override lists only the prices it changes, so it is merged over the base pricing first. */
+function tokenPrices(p: Record<string, unknown>): TokenPrices {
+  const num = (k: string): number | undefined => (typeof p[k] === 'string' ? Number(p[k]) : undefined);
+  const cacheRead = num('input_cache_read');
+  const cacheWrite = num('input_cache_write');
+  const cacheWrite1h = num('input_cache_write_1h');
+  return {
+    inputPerToken: num('prompt') ?? 0,
+    outputPerToken: num('completion') ?? 0,
+    ...(cacheRead !== undefined ? { cacheReadPerToken: cacheRead } : {}),
+    ...(cacheWrite !== undefined ? { cacheWritePerToken: cacheWrite } : {}),
+    ...(cacheWrite1h !== undefined ? { cacheWrite1hPerToken: cacheWrite1h } : {}),
+  };
 }

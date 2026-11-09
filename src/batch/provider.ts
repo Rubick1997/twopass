@@ -18,6 +18,8 @@ export interface BatchResultLine {
   truncated?: boolean;
   inputTokens: number;
   outputTokens: number;
+  /** The provider's `usage` object exactly as returned (cache and reasoning detail), when there was one. */
+  usage?: unknown;
 }
 
 export interface BatchStatus {

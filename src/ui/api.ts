@@ -466,6 +466,7 @@ export function batchReserve(run: Pick<LoadedRun, 'st' | 'task' | 'manifest' | '
     });
     inputTokens = (system + lengths.reduce((a, b) => a + b, 0) / Math.max(lengths.length, 1)) / 4;
   }
+  // Uncached input price on purpose: OpenRouter reserves before it knows about cache hits.
   return customIds.length * (s.maxTokens * price.outputPerToken + inputTokens * price.inputPerToken);
 }
 

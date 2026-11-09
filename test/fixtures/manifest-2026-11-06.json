@@ -1,0 +1,34 @@
+{
+  "runId": "202611062230-banking77-3372-baseline",
+  "createdAt": "2026-11-06T22:30:35.544Z",
+  "taskPath": "tasks/banking77.task.ts",
+  "inputPath": "data/banking77/test.csv",
+  "inputColumns": [
+    "id",
+    "text",
+    "label"
+  ],
+  "rowCount": 0,
+  "labelColumn": "label",
+  "mode": "baseline",
+  "models": {
+    "writer": "anthropic/claude-opus-5.5:batch",
+    "escalation": "anthropic/claude-sonnet-5.5:batch",
+    "triage": "typesafe/jev-1.14",
+    "verify": "typesafe/jev-1.14"
+  },
+  "thresholds": {
+    "t0": 0.9,
+    "t1": 0.9,
+    "t2": 0.9
+  },
+  "thresholdsSource": "task file",
+  "prices": {
+    "anthropic/claude-opus-5.5:batch": {
+      "inputPerToken": 0.000002,
+      "outputPerToken": 0.00001
+    }
+  },
+  "taskSha256": "83059214a9426846ad3c695ad2b42399d99ae33409c81e478f55b9fe6e846c10",
+  "servedModels": []
+}

@@ -42,6 +42,11 @@ export interface TaskDefinition {
      * and can return no answer at all (first live run: 32 of 75 Haiku rows), so set it explicitly.
      */
     reasoning?: Record<string, unknown>;
+    /**
+     * Mark `system` as a cacheable prefix (Anthropic via OpenRouter). `'1h'` suits batches, which can run
+     * longer than the 5-minute default. Ignored by providers that cache automatically.
+     */
+    cacheSystem?: '5m' | '1h';
     /** Round 2 overrides. `template` also gets `{{previous_answer}}`. */
     escalation?: { template?: string; maxTokens?: number; reasoning?: Record<string, unknown> };
     /**

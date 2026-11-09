@@ -81,6 +81,9 @@ describe('report with a reviewer', () => {
     const env = { ...process.env, OPENROUTER_API_KEY: '' };
     const out = execFileSync('node', ['src/cli.ts', 'report', 'run-cli', '--runs', root, '--write'], { encoding: 'utf8', env });
     expect(out).toContain('review: 1 of 2 flagged rows reviewed, 1 to review · 1 answer changed · accuracy, no human 75.0% → with a human 100.0%');
+    // the cost check (billed batches) and the review line appear together
+    expect(out).toMatch(/cost check: per-row cost \$[\d.]+ vs billed \$[\d.]+ over \d+ batch\(es\)/);
+    expect(out.indexOf('review: ')).toBeLessThan(out.indexOf('cost check: '));
     expect(out).toContain('wrote ');
     expect(readFileSync(join(dir, 'review.csv'), 'utf8').trim().split('\n')).toHaveLength(2);
   });
