@@ -353,3 +353,87 @@ export interface OutputsResponse {
 export interface ApiError {
   error: string;
 }
+
+// ---------------------------------------------------------------- results explorer
+
+export interface ExploreThresholds {
+  t0: number;
+  t1: number;
+  t2: number;
+}
+
+export interface ExploreCostPer1k {
+  triage: number;
+  write1: number;
+  verify1: number;
+  write2: number;
+  verify2: number;
+  total: number;
+}
+
+export interface ExploreBin {
+  lo: number;
+  hi: number;
+  n: number;
+  meanP: number;
+  accuracy: number;
+}
+
+/** One calibration row, reduced to what the threshold replay needs (no message text, no labels). */
+export interface ExploreRow {
+  id: string;
+  /** Per decision model: probability of its chosen label, or null if it chose cannot_tell / gave no answer. `correct`: chosen label == true label. */
+  triage: Record<string, { p: number | null; correct: boolean; usd: number }>;
+  /** Round-1 writer. `correct` is null if the writer failed or its output did not parse (then this round cannot accept). */
+  w1: { correct: boolean | null; usd: number };
+  /** Per decision model: probability of "supported" if its choice was "supported", else null. */
+  verify1: Record<string, { p: number | null; usd: number }>;
+  w2: { correct: boolean | null; usd: number };
+  verify2: Record<string, { p: number | null; usd: number }>;
+}
+
+export interface ExploreConfigResult {
+  name: string;
+  triage: string | null;
+  verify: string | null;
+  thresholds: ExploreThresholds | null;
+  rows: number;
+  autoAcceptShare: number;
+  precision: number;
+  flaggedShare: number;
+  accuracyNoHuman: number;
+  costPer1k: ExploreCostPer1k;
+}
+
+export interface ExploreReliability {
+  config: string;
+  stage: 'triage' | 'verify1' | 'verify2';
+  model: string;
+  n: number;
+  eceRaw: number;
+  eceCalibrated: number;
+  raw: ExploreBin[];
+  calibrated: ExploreBin[];
+}
+
+export interface ExploreCalibration {
+  runId: string;
+  rows: number;
+  /** Decision models that have answers for the calibration rows. */
+  models: string[];
+  thresholdsByConfig: Record<string, ExploreThresholds>;
+  /** The fitted threshold per model and stage (calibration.json), to preset a custom controller. */
+  fitsByModel: Record<string, Partial<Record<'triage' | 'verify1' | 'verify2', number>>>;
+  data: ExploreRow[];
+  /** Set when the writer costs in the calibration run were recorded before prompt caching. */
+  pricingNote: string | null;
+}
+
+export interface ExploreResponse {
+  benchId: string;
+  target: number;
+  results: { configs: ExploreConfigResult[] };
+  reliability: ExploreReliability[];
+  calibration: ExploreCalibration | null;
+  calibrationMissingReason: string | null;
+}
