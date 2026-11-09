@@ -9,6 +9,7 @@ import { loadTask } from '../src/task.ts';
 import { buildExploreRows, getBenchExplore, NotFoundError, PRICING_NOTE, readScoreRecords } from '../src/ui/api.ts';
 import { tempDir } from './helpers.ts';
 import { CLEF, EXPLORE_ROWS, exploreBench, exploreRun, JEV, makeRoot, TASK, writeBench } from './ui-fixtures.ts';
+import { exploreHref, parseHash } from '../ui/src/hooks.ts';
 import { coverageCurve, NEVER, replay, type Controller, type Thresholds } from '../ui/src/explore.ts';
 
 const JEV_JEV: Controller = { triage: JEV, verify: JEV };
@@ -219,5 +220,16 @@ describe('GET /api/benches/:id/explore (getBenchExplore)', () => {
     const second = await getBenchExplore(root, 'bench-x');
     expect(second).not.toBe(first);
     expect(second.calibration!.models).toContain(CLEF);
+  });
+});
+
+describe('explore route', () => {
+  it('parses #/benches/:id/explore and keeps the other routes', () => {
+    expect(parseHash('#/benches/bench-x/explore')).toEqual({ page: 'explore', id: 'bench-x' });
+    expect(parseHash(exploreHref('bench-x'))).toEqual({ page: 'explore', id: 'bench-x' });
+    expect(parseHash('#/benches/bench-x')).toEqual({ page: 'bench', id: 'bench-x' });
+    expect(parseHash('#/runs/r1/review')).toEqual({ page: 'review', id: 'r1' });
+    expect(parseHash('#/runs/r1/explore').page).toBe('notfound');
+    expect(parseHash('#/benches/b/review').page).toBe('notfound');
   });
 });
