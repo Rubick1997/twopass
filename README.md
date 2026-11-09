@@ -5,10 +5,15 @@ accepted. Rows it doubts are re-run on a stronger model, and whatever is still u
 
 On the full Banking77 test split, with Cloudflare's Clef as the controller:
 
-> **3,080 rows · 3,002 auto-accepted at 96% precision · 80 re-run · 78 need a look · $1.47 · 17 min**
+> **3,080 rows · 3,002 auto-accepted at 96% precision · 79 re-run · 78 need a look · $1.31 · 159 min**
 
-That's 94.2% end-to-end accuracy for $0.48 per 1,000 rows. A frontier model (Claude Opus 5.5) answering every row
-got 88.3% for $4.13 per 1,000 rows. See [Results](#results), and the [caveats](#limitations) before quoting this.
+That's 94.3% end-to-end accuracy for $0.43 per 1,000 rows. A frontier model (Claude Opus 5.5) answering every row
+got 88.1% for $0.45 per 1,000 rows. With prompt caching on both sides, TwoPass costs about the same as the frontier
+model and is about 6 points more accurate, with 2.5% of rows sent to a person. See [Results](#results), and the
+[caveats](#limitations) before quoting this.
+
+Earlier numbers were higher because those runs had no prompt caching: every row paid full price for the same
+~1,940-token label list, which hit the Opus baseline hardest. Without prompt caching (2026-11-06): $0.48 vs $4.13 per 1k.
 
 ## How it works
 
@@ -173,15 +178,21 @@ Coding agents: see [AGENTS.md](AGENTS.md).
 
 Banking77 has 77 intent labels for customer messages to a bank. Thresholds were fitted on 1,000 held-out train rows
 for ≥95% precision. Every number below is on the full test split (3,080 rows), except the Opus baseline, which ran on a
-1,000-row sample. Run on 2026-11-06.
+1,000-row sample (the same rows in every run). All runs use prompt caching for the writer's system prompt.
 
 | Controller | Auto-accepted | Precision of auto-accepted | Sent to a human | Accuracy, no human | Cost / 1k rows |
 |---|---|---|---|---|---|
-| **Clef** (`cloudflare/clef`) | **97.5%** | **95.6%** | **2.5%** | **94.2%** | **$0.48** |
-| Jev triage + Clef verify | 74.0% | 94.4% | 26.0% | 85.1% | $0.88 |
-| Jev (`typesafe/jev-1.14`) | 57.4% | 95.4% | 42.6% | 84.4% | $1.14 |
-| Luna (`openai/gpt-6-luna-decisions`) | 5.0% | 99.4% | 95.0% | 84.4% | $2.33 |
-| Baseline: Opus 5.5 on every row | 100% | 88.3% | 0% | 88.3% | $4.13 |
+| **Clef** (`cloudflare/clef`) | **97.5%** | **95.7%** | **2.5%** | **94.3%** | **$0.43** |
+| Jev triage + Clef verify | 74.0% | 94.4% | 26.0% | 85.1% | ≈ $0.28 * |
+| Jev (`typesafe/jev-1.14`) | 57.4% | 95.4% | 42.6% | 84.4% | ≈ $0.25 * |
+| Luna (`openai/gpt-6-luna-decisions`) | 5.0% | 99.4% | 95.0% | 84.4% | ≈ $0.49 * |
+| Baseline: Opus 5.5 on every row | 100% | 88.1% | 0% | 88.1% | $0.45 |
+
+Clef and the baseline were re-run with caching on 2026-11-08 (thresholds and rows from the 2026-11-06 bench; only
+caching changed). Their accuracy came within 0.2 points of the uncached run (94.2% and 88.3%), and per-row computed cost
+matched OpenRouter's bill exactly. \* The other three rows are from 2026-11-06, and their cost is an **estimate**: that
+run's actual tokens re-priced at cache rates. The same method predicted the re-run's Clef and Opus costs within 0.5%.
+Uncached (2026-11-06) costs per 1k: Clef $0.48, Jev + Clef $0.88, Jev $1.14, Luna $2.33, Opus $4.13.
 
 Writer: Claude Haiku 5.5 (batch). Escalation: Claude Sonnet 5.5 (batch). All through OpenRouter.
 
@@ -193,14 +204,24 @@ What the numbers say:
   format. Luna never reached 95% precision in round 0, so it sends almost everything to a human.
 - **Judging an answer in isolation is weak.** A verifier that saw only the message and one label let close-but-wrong
   labels through at 0.95+ confidence. Showing it all 77 labels fixed that.
-- **Escalation is where the money goes.** Sonnet re-runs are most of the cost in every configuration except Clef's,
-  because Clef settles almost everything in round 0.
+- **Caching erased most of the cost gap, not the accuracy gap.** Sonnet and Opus batch writing got about 85–90% cheaper
+  with caching, and the Opus baseline is all batch writing. Clef's cost is almost all round-0 decision calls, which caching doesn't
+  touch, so Clef went from 8.7× cheaper than Opus to about 5% cheaper. The case for TwoPass on this task is now
+  accuracy and knowing which rows to check, not price.
+- **Escalation is still the biggest writing cost.** Sonnet re-runs dominate the writing cost in the Jev and Luna
+  configurations; Clef settles almost everything in round 0.
 
 ## Cost
 
-Decision-model calls are cheap: about $0.07 (Jev), $0.10 (Luna) or $0.41 (Clef) per 1,000 rows for round 0. Haiku
-batch writing costs about $0.05 per 1,000 rows. Sonnet escalation is about $2.13 per 1,000 rows re-run. A full
+Decision-model calls are cheap: about $0.07 (Jev), $0.10 (Luna) or $0.41 (Clef) per 1,000 rows for round 0. They
+can't be cached. With the label list cached, Haiku batch writing costs about $0.03 per 1,000 rows written, Sonnet
+escalation about $0.35 per 1,000 rows re-run, and Opus on every row $0.45 per 1,000. Without caching these were
+about $0.05, $2.13 and $4.13. The cached re-run of Clef and the baseline cost $1.76; the first full uncached
 `bench banking77` (calibration plus four configurations and the baseline) cost about $22.
+
+`report` prints `cost check: per-row cost $X vs billed $Y`: per-row costs are computed from each row's token usage,
+with cache reads and writes priced separately, and checked against the batch totals OpenRouter bills. On the cached
+re-run they matched to the cent.
 
 Always pass `--max-usd`. OpenRouter reserves each batch's worst case (every row at `max_tokens`) from your balance
 when the batch is submitted. On a small balance, add `--max-batch-rows 500` to send batches one at a time.
@@ -225,7 +246,8 @@ when the batch is submitted. On a small balance, add `--max-batch-rows 500` to s
   memorization effect of about 5 points or more. Sonnet also named the dataset in its reasoning, so the
   frontier baseline may know it too.
 - **OpenRouter batch has no zero data retention and runs on US infrastructure only.** Use public or non-sensitive data.
-- **Each batch round can take up to 24 hours.** In practice: 4–8 minutes per round.
+- **Each batch round can take up to 24 hours.** On 2026-11-06 rounds took 4–8 minutes; on 2026-11-08 one 97-row Haiku
+  round took 2.5 hours in the provider's queue.
 - **The Decisions API is alpha** (`/api/alpha/decisions`). Model IDs and behaviour may change. Every run pins what it used.
 - **One dataset.** Thresholds are per task: fit them on your own labeled data. Vendor defaults are never used.
 - **Small samples in places.** The baseline ran on 1,000 rows, and Clef's verify stages saw fewer than 100 rows on test.
