@@ -22,7 +22,10 @@ import {
   readOverrides,
   type FoldedOutcome,
 } from '../overrides.ts';
-import { reviewSummary, rewriteOutputs, summarize, type ReviewSummary } from '../report.ts';
+import { matchesLabel, reviewSummary, rewriteOutputs, summarize, type ReviewSummary } from '../report.ts';
+import type { BenchReport } from '../bench.ts';
+import { readCalibration } from '../runner.ts';
+import type { ScoreRecord } from '../score.ts';
 import { loadRun, type RunManifest } from '../run.ts';
 import { batchDurationMs, median, spendByStage } from '../stats.ts';
 import { loadTask, parseWriterOutput, render, type TaskDefinition } from '../task.ts';
@@ -38,6 +41,10 @@ import type {
   BenchRef,
   BenchReportResponse,
   ExpectedFinish,
+  ExploreCalibration,
+  ExploreResponse,
+  ExploreRow,
+  ExploreThresholds,
   OutcomeCounts,
   OutputsResponse,
   OverrideResponse,
@@ -689,6 +696,230 @@ export function getBenchReport(runsRoot: string, benchId: string): BenchReportRe
   const path = join(resolveInside(runsRoot, benchId), 'bench-report.md');
   if (!existsSync(path)) throw new NotFoundError(`Bench ${benchId} has no report yet`);
   return { markdown: readFileSync(path, 'utf8') };
+}
+
+// ---------------------------------------------------------------- results explorer
+
+export const PRICING_NOTE =
+  'Writer costs as recorded in the calibration run (no prompt caching). With caching, Sonnet and Opus writing is about 85–90% cheaper; decision-model costs are unaffected.';
+
+/** scores.jsonl as the scorer reads it: the last record per model, stage and row wins; a torn line is skipped. */
+export function readScoreRecords(dir: string): ScoreRecord[] {
+  const path = join(dir, 'scores.jsonl');
+  if (!existsSync(path)) return [];
+  const byKey = new Map<string, ScoreRecord>();
+  for (const line of readFileSync(path, 'utf8').split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const r = JSON.parse(line) as ScoreRecord;
+      byKey.set(`${r.model}|${r.stage}|${r.rowId}`, r);
+    } catch {
+      // a torn last line
+    }
+  }
+  return [...byKey.values()];
+}
+
+/**
+ * One compact row per calibration row, for the threshold replay in ui/src/explore.ts. The run's own models
+ * answer from the ledger; other models from scores.jsonl, where a verify record counts only if it judged the
+ * same writer answer (the rule `scoreRun` uses). Writer correctness uses the same parse and `matchesLabel`
+ * as `computeOutcomes`.
+ */
+export function buildExploreRows(o: {
+  task: TaskDefinition;
+  records: RowRecord[];
+  labelColumn: string;
+  st: RunState;
+  runModels: { triage: string; verify: string };
+  scores: ScoreRecord[];
+}): { rows: ExploreRow[]; models: string[] } {
+  const { task, st, runModels } = o;
+  const models = new Set<string>(task.triage ? [runModels.triage, runModels.verify] : [runModels.verify]);
+  const scoreIndex = new Map<string, ScoreRecord>();
+  for (const r of o.scores) {
+    models.add(r.model);
+    scoreIndex.set(`${r.model}|${r.stage}|${r.rowId}`, r);
+  }
+
+  const triageEntry = (answer: unknown, label: string, usd: number) => {
+    const a = asChoice(answer as never);
+    if (!a || a.choice === CANNOT_TELL) return { p: null, correct: false, usd };
+    return { p: a.probabilities[a.choice] ?? 0, correct: matchesLabel(a.choice, label), usd };
+  };
+  const verifyEntry = (answer: unknown, usd: number) => {
+    const a = asChoice(answer as never);
+    return { p: a?.choice === 'supported' ? (a.probabilities.supported ?? 0) : null, usd };
+  };
+
+  const rows = o.records.map((row): ExploreRow => {
+    const label = row.data[o.labelColumn] ?? '';
+    const out: ExploreRow = { id: row.id, triage: {}, w1: { correct: null, usd: 0 }, verify1: {}, w2: { correct: null, usd: 0 }, verify2: {} };
+
+    if (task.triage) {
+      for (const m of models) {
+        const own = m === runModels.triage ? st.triage.get(row.id) : undefined;
+        if (own) out.triage[m] = triageEntry(own.answers.answer, label, own.costUsd);
+        else if (m !== runModels.triage) {
+          const rec = scoreIndex.get(`${m}|triage|${row.id}`);
+          if (rec) out.triage[m] = triageEntry(rec.verdict, label, rec.costUsd);
+        }
+      }
+    }
+
+    for (const round of [1, 2] as const) {
+      const res = st.results.get(customId(row.id, round));
+      const parsed = res?.ok ? parseWriterOutput(task, res.text ?? '') : undefined;
+      const writer = { correct: parsed?.ok ? matchesLabel(parsed.value, label) : null, usd: res?.costUsd ?? 0 };
+      const verifyOut = round === 1 ? out.verify1 : out.verify2;
+      if (round === 1) out.w1 = writer;
+      else out.w2 = writer;
+      if (!parsed?.ok) continue; // no writer answer, nothing was verified
+      const stage = round === 1 ? 'verify1' : 'verify2';
+      for (const m of models) {
+        const own = m === runModels.verify ? st.verify.get(verifyKey(row.id, round)) : undefined;
+        if (own) verifyOut[m] = verifyEntry(own.answers.verdict, own.costUsd);
+        else if (m !== runModels.verify) {
+          const rec = scoreIndex.get(`${m}|${stage}|${row.id}`);
+          if (rec && rec.answer === parsed.value) verifyOut[m] = verifyEntry(rec.verdict, rec.costUsd);
+        }
+      }
+    }
+    return out;
+  });
+  return { rows, models: [...models] };
+}
+
+interface ExploreCacheEntry {
+  key: string;
+  value: ExploreResponse;
+}
+const exploreCache = new Map<string, ExploreCacheEntry>();
+
+/**
+ * Everything the results explorer needs for one bench: the test-split table and reliability bins from
+ * bench-report.json, and the calibration run's rows for the threshold replay. Without the calibration
+ * run folder, the table and reliability are still returned, with `calibration: null` and a reason.
+ */
+export async function getBenchExplore(runsRoot: string, benchId: string): Promise<ExploreResponse> {
+  const dir = resolveInside(runsRoot, benchId);
+  const reportPath = join(dir, 'bench-report.json');
+  if (!existsSync(join(dir, 'bench.json'))) throw new NotFoundError(`No bench ${benchId}`);
+  if (!existsSync(reportPath)) throw new NotFoundError(`Bench ${benchId} has no bench-report.json yet`);
+  const state = readBench(dir);
+
+  // The calibration run: its own id, or (reused calibration) the run named inside calibration.json.
+  let calibRunId = state.calibrationRunId;
+  let reason: string | null = null;
+  if (!calibRunId && state.calibrationPath) {
+    try {
+      calibRunId = readCalibration(state.calibrationPath).runId;
+    } catch {
+      reason = `The calibration file ${state.calibrationPath} could not be read.`;
+    }
+  }
+  if (!calibRunId && !reason) reason = 'This bench has no calibration run.';
+  let calibDir: string | null = null;
+  if (calibRunId) {
+    calibDir = resolveInside(runsRoot, calibRunId);
+    if (!existsSync(join(calibDir, 'manifest.json'))) {
+      reason = `The calibration run ${calibRunId} is not in the runs folder.`;
+      calibDir = null;
+    }
+  }
+
+  const key = [
+    reportPath,
+    join(dir, 'bench.json'),
+    ...(calibDir ? [join(calibDir, 'manifest.json'), join(calibDir, 'ledger.jsonl'), join(calibDir, 'scores.jsonl')] : []),
+  ]
+    .map(statKey)
+    .join('|');
+  const hit = exploreCache.get(dir);
+  if (hit && hit.key === key) return hit.value;
+
+  const report = JSON.parse(readFileSync(reportPath, 'utf8')) as BenchReport;
+  const configs = report.configs ?? [];
+  const thresholdsByConfig: Record<string, ExploreThresholds> = {};
+  for (const c of configs) if (c.thresholds) thresholdsByConfig[c.name] = c.thresholds;
+  const fitsByModel: ExploreCalibration['fitsByModel'] = {};
+  for (const [model, stages] of Object.entries(report.calibrationFits ?? {})) {
+    const fits: ExploreCalibration['fitsByModel'][string] = {};
+    for (const stage of ['triage', 'verify1', 'verify2'] as const) {
+      const t = stages[stage]?.fit?.threshold;
+      if (typeof t === 'number') fits[stage] = t;
+    }
+    fitsByModel[model] = fits;
+  }
+
+  let calibration: ExploreCalibration | null = null;
+  if (calibDir) {
+    try {
+      const run = await loadRunCached(calibDir);
+      if (!run.manifest.labelColumn) reason = `The calibration run ${run.manifest.runId} has no label column.`;
+      else if (!run.task) reason = run.problem ?? `The task file of the calibration run could not be loaded.`;
+      else {
+        const { rows, models } = buildExploreRows({
+          task: run.task,
+          records: run.records,
+          labelColumn: run.manifest.labelColumn,
+          st: run.st,
+          runModels: { triage: run.manifest.models.triage, verify: run.manifest.models.verify },
+          scores: readScoreRecords(calibDir),
+        });
+        const results = [...run.st.results.values()];
+        calibration = {
+          runId: run.manifest.runId,
+          rows: rows.length,
+          models,
+          thresholdsByConfig,
+          fitsByModel,
+          data: rows,
+          // Ledgers before 2026-11-07 have no raw usage: their writer costs were recorded without caching.
+          pricingNote: results.length > 0 && results.every((r) => r.usage === undefined) ? PRICING_NOTE : null,
+        };
+      }
+    } catch (err) {
+      reason = `The calibration run could not be read: ${(err as Error).message}`;
+    }
+  }
+
+  const value: ExploreResponse = {
+    benchId: report.benchId ?? benchId,
+    createdAt: typeof report.createdAt === 'string' ? report.createdAt : null,
+    target: report.target,
+    baselineModel: typeof state.baseline === 'string' ? state.baseline : null,
+    results: {
+      configs: configs.map((c) => ({
+        name: c.name,
+        triage: c.triage,
+        verify: c.verify,
+        thresholds: c.thresholds,
+        rows: c.rows,
+        autoAcceptShare: c.autoAcceptShare,
+        precision: c.precision,
+        flaggedShare: c.flaggedShare,
+        accuracyNoHuman: c.accuracyNoHuman,
+        costPer1k: c.costPer1k,
+      })),
+    },
+    reliability: configs.flatMap((c) =>
+      (c.calibration ?? []).map((s) => ({
+        config: c.name,
+        stage: s.stage,
+        model: s.model,
+        n: s.n,
+        eceRaw: s.eceRaw,
+        eceCalibrated: s.eceCalibrated,
+        raw: s.reliabilityRaw,
+        calibrated: s.reliabilityCalibrated,
+      })),
+    ),
+    calibration,
+    calibrationMissingReason: calibration ? null : (reason ?? 'The calibration run is not available.'),
+  };
+  exploreCache.set(dir, { key, value });
+  return value;
 }
 
 // ---------------------------------------------------------------- balance

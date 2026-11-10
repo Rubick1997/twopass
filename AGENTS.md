@@ -92,6 +92,24 @@ pnpm dev:ui                               # Vite dev server; proxies /api to a r
 **The review queue** (`#/runs/:id/review`, `GET /api/runs/:id/review?filter=flagged|reviewed|all`) is built from
 `computeOutcomes` plus `foldOverrides`; the keyboard map and optimistic-update maths are pure helpers in `ui/src/review.ts`.
 
+**The results explorer** (`#/benches/:id/explore[?tab=try|results|method]`, linked from the bench page and the home list;
+`GET /api/benches/:id/explore` → `getBenchExplore` in `api.ts`) is written for non-technical readers: three tabs (`role=tablist`,
+arrow keys, the tab in the URL hash so links and Back work; `useRoute` parses the query). **Try it** picks a setup (bench config)
+and one accuracy slider (80–99%, default = the bench target): the thresholds are refitted live in the browser with `fitThreshold`
+from `src/calibrate.ts` (imported by the app; `ui/tsconfig.json` includes it) over points built from the `ExploreRow`s exactly as
+`scoreRun` builds them (`stagePoints` / `refitThresholds` in `ui/src/explore.ts`), then replayed; a 100-square waffle and one
+sentence show the outcome, the per-stage sliders live under "Fine-tune each step (advanced)". **At the bench target the refit
+must reproduce the bench's calibrated thresholds** (`test/ui-explore.test.ts` checks it against `scoreRun` on a seeded 80-row
+fixture; on the real bench-2026-11-06-f417 it reproduces calibration.json exactly). **Results** is the test-split table and cost
+bars from `bench-report.json`; **How it was tested** holds the accuracy-at-coverage and reliability charts, each technical term
+explained once. User-facing text uses plain names (`friendlyModel`, `friendlyConfig`, step names), raw model IDs only in titles
+and the advanced section. The replay is `ui/src/explore.ts` (pure, runs in the browser) over compact `ExploreRow`s of the bench's
+*calibration run* (a `collect` run on held-out train rows; found through `calibrationRunId`, or the `runId` inside `calibrationPath`
+for a reused calibration; without the folder, `calibration: null` and a reason), and **must stay equivalent to `computeOutcomes`**:
+`test/ui-explore.test.ts` replays a fixture ledger both ways. Pricing-note rule: if the calibration run's `batch_result`s carry no
+`usage`, its writer costs were recorded without prompt caching, so `pricingNote` is set and the page marks every cost figure with
+an asterisk pointing at one footnote.
+
 **The run lock.** `executeRun` writes `runs/<id>/run.lock` (`{ pid, startedAt, heartbeatAt }`), refreshes the heartbeat
 every 15 s, and removes it on normal exit, on errors and on SIGINT. A run counts as *running* only if the heartbeat is
 under 60 s old and the pid is alive. The lock is advisory: nothing refuses to start because of it, so a crash (which
@@ -121,6 +139,8 @@ src/
   datasets/         Banking77 download
 tasks/              task files (banking77.task.ts)
 ui/                 the browser app (Vite + React, own tsconfig), built to dist/ui
+  ui/src/explore.ts        threshold replay + live refit, waffle counts and plain names for the results explorer (pure)
+  ui/src/pages/Explore.tsx results explorer page: three tabs, inline SVG charts, no chart library
 scripts/            dataset fetch, contamination check, fake-live-run.ts (UI demo, no cost)
 test/               vitest, HTTP mocked through test/helpers.ts
 docs-public/        images for the README (docs/ is local-only and gitignored)

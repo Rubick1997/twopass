@@ -1,7 +1,7 @@
 import type { BenchConfigSummary, BenchesResponse, RunListItem, RunsResponse } from '../../../src/ui/api-types.ts';
 import { ErrorNote, ModeTag, ModelsLine, ProgressBar, SpendVsCap, StatusBadge } from '../components.tsx';
 import { formatAgo, formatCount, formatDateTime, formatPct, formatUsd } from '../format.ts';
-import { benchHref, reviewHref, runHref, usePoll, useNow } from '../hooks.ts';
+import { benchHref, exploreHref, reviewHref, runHref, usePoll, useNow } from '../hooks.ts';
 
 export function Home() {
   const runs = usePoll<RunsResponse>('/api/runs');
@@ -52,6 +52,11 @@ export function Home() {
                 </h3>
                 <StatusBadge status={b.status} />
                 <span className="muted small">started {formatDateTime(b.createdAt)}</span>
+                {b.hasReport && (
+                  <a href={exploreHref(b.benchId)} className="small">
+                    Explore results
+                  </a>
+                )}
                 <span className="push">
                   <strong>{formatUsd(b.spentUsd)}</strong>
                   <span className="muted">{b.maxUsd !== null ? ` of ${formatUsd(b.maxUsd)} cap` : ''}</span>

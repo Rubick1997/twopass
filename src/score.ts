@@ -14,7 +14,7 @@ import { parseWriterOutput, verifyQuestion, verifyState, type TaskDefinition } f
 export type Stage = 'triage' | 'verify1' | 'verify2';
 export const STAGES: Stage[] = ['triage', 'verify1', 'verify2'];
 
-interface ScoreRecord {
+export interface ScoreRecord {
   model: string;
   servedAs: string;
   stage: Stage;

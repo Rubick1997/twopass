@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startUiServer, type UiServer } from '../src/ui/server.ts';
 import { tempDir } from './helpers.ts';
-import { makeRoot, makeRun, MIN, results, reviewRun, submit, T0, triage, WRITER, writeBench } from './ui-fixtures.ts';
+import { exploreBench, exploreRun, makeRoot, makeRun, MIN, results, reviewRun, submit, T0, triage, WRITER, writeBench } from './ui-fixtures.ts';
 
 const KEY = 'not-a-real-key-FAKE-KEY-0123456789';
 
@@ -62,6 +62,8 @@ beforeAll(async () => {
   results(ledger, 'batch-a', 1, WRITER, { r1: 'card_arrival', r2: 'age_limit' }, 5 * MIN);
   submit(ledger, 'batch-b', 1, WRITER, ['r3', 'r4'], 6 * MIN);
   reviewRun(root, 'run-review');
+  exploreRun(root, 'run-calib');
+  exploreBench(root, 'bench-x', { calibrationRunId: 'run-calib' });
   const benchDir = writeBench(root, 'bench-a', { jev: 'run-a' });
   writeFileSync(join(benchDir, 'bench-report.md'), '# Bench bench-a\n\n| a | b |\n|---|---|\n| 1 | 2 |\n');
 
@@ -100,7 +102,7 @@ describe('twopass ui server', () => {
     expect(runs.status).toBe(200);
     expect(runs.headers['content-type']).toMatch(/application\/json/);
     expect(runs.headers['cache-control']).toBe('no-store');
-    expect(JSON.parse(runs.body).runs.map((r: { runId: string }) => r.runId).sort()).toEqual(['run-a', 'run-review']);
+    expect(JSON.parse(runs.body).runs.map((r: { runId: string }) => r.runId).sort()).toEqual(['run-a', 'run-calib', 'run-review']);
 
     const run = JSON.parse((await hit('/api/runs/run-a')).body);
     expect(run).toMatchObject({ runId: 'run-a', status: 'stopped', bench: { benchId: 'bench-a', config: 'jev' } });
@@ -109,6 +111,8 @@ describe('twopass ui server', () => {
     expect(JSON.parse((await hit('/api/benches')).body).benches[0]).toMatchObject({ benchId: 'bench-a', hasReport: true });
     expect(JSON.parse((await hit('/api/benches/bench-a')).body)).toMatchObject({ benchId: 'bench-a', state: { benchId: 'bench-a' } });
     expect(JSON.parse((await hit('/api/benches/bench-a/report')).body).markdown).toMatch(/^# Bench bench-a/);
+    const explore = JSON.parse((await hit('/api/benches/bench-x/explore')).body);
+    expect(explore).toMatchObject({ benchId: 'bench-x', calibration: { runId: 'run-calib', rows: 9 } });
 
     const balance = JSON.parse((await hit('/api/balance')).body);
     expect(balance).toMatchObject({ available: true, totalCredits: 10, totalUsage: 4, balanceUsd: 6 });
@@ -120,6 +124,8 @@ describe('twopass ui server', () => {
     expect((await hit('/api/runs/nope')).status).toBe(404);
     expect((await hit('/api/benches/nope')).status).toBe(404);
     expect((await hit('/api/benches/bench-a/report/extra')).status).toBe(404);
+    expect((await hit('/api/benches/bench-a/explore')).status).toBe(404); // no bench-report.json
+    expect((await hit('/api/benches/nope/explore')).status).toBe(404);
     expect((await hit('/api/whatever')).status).toBe(404);
   });
 

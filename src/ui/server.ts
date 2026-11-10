@@ -7,6 +7,7 @@ import {
   BadRequestError,
   getBalance,
   getBench,
+  getBenchExplore,
   getBenchReport,
   getReview,
   getRun,
@@ -151,6 +152,7 @@ export function createUiHandler(o: UiServerOptions & { getPort: () => number }) 
     if (kind === 'benches' && id === undefined) return json(res, 200, await listBenches(o.runsRoot, api));
     if (kind === 'benches' && id !== undefined && sub === undefined) return json(res, 200, await getBench(o.runsRoot, id, api));
     if (kind === 'benches' && id !== undefined && sub === 'report') return json(res, 200, getBenchReport(o.runsRoot, id));
+    if (kind === 'benches' && id !== undefined && sub === 'explore') return json(res, 200, await getBenchExplore(o.runsRoot, id));
     if (kind === 'balance' && id === undefined) {
       return json(
         res,

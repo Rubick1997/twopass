@@ -117,6 +117,11 @@ every batch with its age, spend against the cap by stage, accepted / flagged / p
 and, with `OPENROUTER_API_KEY` set, your OpenRouter balance next to our estimate of the worst case OpenRouter holds for
 batches in flight. A bench shows its configurations side by side, plus its report.
 
+A finished bench also has a results explorer (`#/benches/<id>/explore`): the test-split table, cost by stage, and three
+sliders (t0, t1, t2) that replay the bench's held-out calibration rows under any thresholds and any decision-model
+combination, showing auto-accepted share, precision, share sent to a human, accuracy with no human and cost per 1k rows
+against the calibrated thresholds. It also draws accuracy at coverage and reliability charts.
+
 It calls no model, binds to 127.0.0.1, and never sends your key to the browser. Apart from review decisions (below), it
 only reads files. To try it without
 a key or any spend, `node scripts/fake-live-run.ts` writes a fake run that progresses over about four minutes.
