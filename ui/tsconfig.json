@@ -15,5 +15,5 @@
     "noEmit": true,
     "types": ["vite/client"]
   },
-  "include": ["src", "../src/ui/api-types.ts", "../src/ui/models.ts"]
+  "include": ["src", "../src/ui/api-types.ts", "../src/ui/models.ts", "../src/calibrate.ts"]
 }

@@ -431,7 +431,11 @@ export interface ExploreCalibration {
 
 export interface ExploreResponse {
   benchId: string;
+  /** When the bench started (bench-report.json), for the page title. */
+  createdAt: string | null;
   target: number;
+  /** The baseline's writer model (bench.json), for the comparison line. */
+  baselineModel: string | null;
   results: { configs: ExploreConfigResult[] };
   reliability: ExploreReliability[];
   calibration: ExploreCalibration | null;

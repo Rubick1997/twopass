@@ -886,7 +886,9 @@ export async function getBenchExplore(runsRoot: string, benchId: string): Promis
 
   const value: ExploreResponse = {
     benchId: report.benchId ?? benchId,
+    createdAt: typeof report.createdAt === 'string' ? report.createdAt : null,
     target: report.target,
+    baselineModel: typeof state.baseline === 'string' ? state.baseline : null,
     results: {
       configs: configs.map((c) => ({
         name: c.name,

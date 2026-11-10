@@ -323,3 +323,69 @@ export function exploreBench(
   );
   return dir;
 }
+
+/**
+ * A larger `collect` run for the refit tests: `n` rows with seeded pseudo-random answers. Jev (the run's own model)
+ * answers in the ledger; Clef's answers go to scores.jsonl, as `calibrate --models` would leave them. Triage
+ * probabilities have two decimals for Jev and four for Clef (like the real models), a few rows abstain, a few
+ * writer outputs do not parse, and a verdict is "supported" more often when the writer was right.
+ */
+export function exploreRunLarge(root: string, runId = 'run-calib-big', n = 80) {
+  const run = makeRun(root, runId, { rows: n, mode: 'collect' });
+  const { ledger } = run;
+  let seed = 11;
+  const rand = () => {
+    // mulberry32: deterministic, and every step stays within 32 bits
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = seed;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const pick = (p: number) => rand() < p;
+  const other = (label: string) => LABELS[(LABELS.indexOf(label) + 1 + Math.floor(rand() * 3)) % LABELS.length]!;
+  const scores: Array<Record<string, unknown>> = [];
+  const triageAnswer = (label: string, digits: number) => {
+    if (pick(0.06)) return { type: 'choice', choice: 'cannot_tell', probabilities: { cannot_tell: 0.7, [label]: 0.3 }, confidence: 0.7 };
+    const p = Number((0.5 + 0.5 * rand()).toFixed(digits));
+    const c = pick(p) ? label : other(label);
+    return { type: 'choice', choice: c, probabilities: { [c]: p, cannot_tell: 1 - p }, confidence: p };
+  };
+  const verdictAnswer = (correct: boolean, digits: number) => {
+    const p = Number((0.5 + 0.5 * rand()).toFixed(digits));
+    const choice = pick(correct ? 0.9 : 0.35) ? 'supported' : pick(0.8) ? 'unsupported' : 'cannot_tell';
+    return { type: 'choice', choice, probabilities: { supported: p, unsupported: 1 - p, cannot_tell: 0 }, confidence: p };
+  };
+  const labelOf = (i: number) => LABELS[i % LABELS.length]!;
+
+  run.rowIds.forEach((rowId, i) => {
+    ledger.append({ t: 'decision', rowId, round: 0, stage: 'triage', model: `${JEV}-x`, costUsd: 0.001, latencyMs: 5, at: iso(0), answers: { answer: triageAnswer(labelOf(i), 2) } });
+    scores.push({ model: CLEF, servedAs: CLEF, stage: 'triage', rowId, verdict: triageAnswer(labelOf(i), 4), costUsd: 0.004, latencyMs: 1 });
+  });
+
+  for (const round of [1, 2] as const) {
+    const model = round === 1 ? WRITER : ESCALATION;
+    submit(ledger, `big${round}`, round, model, run.rowIds, round * MIN);
+    const written = new Map<string, string | null>();
+    run.rowIds.forEach((rowId, i) => {
+      const label = labelOf(i);
+      const text = pick(0.05) ? null : pick(round === 1 ? 0.75 : 0.85) ? label : other(label);
+      written.set(rowId, text);
+      ledger.append({
+        t: 'batch_result', batchId: `big${round}`, round, model, customId: customId(rowId, round), rowId, ok: text !== null,
+        ...(text !== null ? { text: JSON.stringify({ label: text }) } : { error: 'boom' }), inputTokens: 500, outputTokens: 8,
+        costUsd: round === 1 ? 0.0005 : 0.004, at: iso(round * MIN),
+      });
+    });
+    ledger.append({ t: 'batch_finished', batchId: `big${round}`, status: 'completed', costUsd: 0.05, undecodable: 0, at: iso(round * MIN + 1) });
+    run.rowIds.forEach((rowId, i) => {
+      const text = written.get(rowId);
+      if (text === null || text === undefined) return;
+      const correct = text === labelOf(i);
+      ledger.append({ t: 'decision', rowId, round, stage: 'verify', model: `${JEV}-x`, costUsd: 0.002, latencyMs: 5, at: iso(round * MIN + 2), answers: { verdict: verdictAnswer(correct, 2) } });
+      if (pick(0.95)) scores.push({ model: CLEF, servedAs: CLEF, stage: `verify${round}`, rowId, answer: text, verdict: verdictAnswer(correct, 4), costUsd: 0.004, latencyMs: 1 });
+    });
+  }
+  writeFileSync(join(run.dir, 'scores.jsonl'), scores.map((s) => JSON.stringify(s)).join('\n') + '\n');
+  return run;
+}

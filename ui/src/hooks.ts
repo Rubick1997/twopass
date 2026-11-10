@@ -97,11 +97,14 @@ export type Route =
   | { page: 'run'; id: string }
   | { page: 'review'; id: string }
   | { page: 'bench'; id: string }
-  | { page: 'explore'; id: string }
+  | { page: 'explore'; id: string; tab?: string }
   | { page: 'notfound'; hash: string };
 
 export function parseHash(hash: string): Route {
-  const path = hash.replace(/^#/, '') || '/';
+  const full = hash.replace(/^#/, '') || '/';
+  const q = full.indexOf('?');
+  const path = q === -1 ? full : full.slice(0, q);
+  const query = q === -1 ? '' : full.slice(q + 1);
   if (path === '/') return { page: 'home' };
   const m = /^\/(runs|benches)\/([^/]+)(\/review|\/explore)?\/?$/.exec(path);
   if (m && !(m[3] === '/review' && m[1] !== 'runs') && !(m[3] === '/explore' && m[1] !== 'benches')) {
@@ -112,7 +115,10 @@ export function parseHash(hash: string): Route {
       return { page: 'notfound', hash };
     }
     if (m[3] === '/review') return { page: 'review', id };
-    if (m[3] === '/explore') return { page: 'explore', id };
+    if (m[3] === '/explore') {
+      const tab = new URLSearchParams(query).get('tab');
+      return tab ? { page: 'explore', id, tab } : { page: 'explore', id };
+    }
     return m[1] === 'runs' ? { page: 'run', id } : { page: 'bench', id };
   }
   return { page: 'notfound', hash };
@@ -121,9 +127,10 @@ export function parseHash(hash: string): Route {
 export const runHref = (id: string) => `#/runs/${encodeURIComponent(id)}`;
 export const reviewHref = (id: string) => `#/runs/${encodeURIComponent(id)}/review`;
 export const benchHref = (id: string) => `#/benches/${encodeURIComponent(id)}`;
-export const exploreHref = (id: string) => `#/benches/${encodeURIComponent(id)}/explore`;
+/** The explorer, optionally on one of its tabs (`?tab=try|results|method`). */
+export const exploreHref = (id: string, tab?: string) => `#/benches/${encodeURIComponent(id)}/explore${tab ? `?tab=${encodeURIComponent(tab)}` : ''}`;
 
-/** A tiny hash router: `#/`, `#/runs/:id`, `#/runs/:id/review`, `#/benches/:id`, `#/benches/:id/explore`. */
+/** A tiny hash router: `#/`, `#/runs/:id`, `#/runs/:id/review`, `#/benches/:id`, `#/benches/:id/explore[?tab=]`. */
 export function useRoute(): Route {
   const [route, setRoute] = useState(() => parseHash(window.location.hash));
   useEffect(() => {

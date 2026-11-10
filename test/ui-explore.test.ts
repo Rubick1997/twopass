@@ -1,21 +1,39 @@
 import { appendFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { fitThreshold, NEVER as CAL_NEVER } from '../src/calibrate.ts';
+import type { DecisionModel } from '../src/decide/model.ts';
 import { computeOutcomes } from '../src/pipeline.ts';
+import { scoreRun } from '../src/score.ts';
 import { matchesLabel } from '../src/report.ts';
 import { Ledger, replay as replayLedger } from '../src/ledger.ts';
 import { loadRun } from '../src/run.ts';
 import { loadTask } from '../src/task.ts';
 import { buildExploreRows, getBenchExplore, NotFoundError, PRICING_NOTE, readScoreRecords } from '../src/ui/api.ts';
 import { tempDir } from './helpers.ts';
-import { CLEF, EXPLORE_ROWS, exploreBench, exploreRun, JEV, makeRoot, TASK, writeBench } from './ui-fixtures.ts';
+import { CLEF, EXPLORE_ROWS, exploreBench, exploreRun, exploreRunLarge, JEV, makeRoot, TASK, writeBench } from './ui-fixtures.ts';
 import { exploreHref, parseHash } from '../ui/src/hooks.ts';
-import { coverageCurve, NEVER, replay, type Controller, type Thresholds } from '../ui/src/explore.ts';
+import {
+  bestConfig,
+  configDescription,
+  coverageCurve,
+  friendlyConfig,
+  friendlyModel,
+  NEVER,
+  outcomeSentence,
+  refitThresholds,
+  replay,
+  roundToTotal,
+  stagePoints,
+  waffleCounts,
+  type Controller,
+  type Thresholds,
+} from '../ui/src/explore.ts';
 
 const JEV_JEV: Controller = { triage: JEV, verify: JEV };
 
-async function loaded(root: string, runId = 'run-calib', scores: Array<Record<string, unknown>> = []) {
-  const run = exploreRun(root, runId);
+async function loaded(root: string, runId = 'run-calib', scores: Array<Record<string, unknown>> = [], make: (root: string, runId: string) => ReturnType<typeof exploreRun> = exploreRun) {
+  const run = make(root, runId);
   if (scores.length) writeFileSync(join(run.dir, 'scores.jsonl'), scores.map((s) => JSON.stringify(s)).join('\n') + '\n');
   const { manifest, records } = loadRun(run.dir);
   const st = replayLedger(new Ledger(join(run.dir, 'ledger.jsonl')).read());
@@ -231,5 +249,147 @@ describe('explore route', () => {
     expect(parseHash('#/runs/r1/review')).toEqual({ page: 'review', id: 'r1' });
     expect(parseHash('#/runs/r1/explore').page).toBe('notfound');
     expect(parseHash('#/benches/b/review').page).toBe('notfound');
+  });
+});
+
+describe('refit: the "how accurate" slider', () => {
+  const never: DecisionModel['decide'] = () => Promise.reject(new Error('the refit test must not call a model'));
+  const STAGES = ['triage', 'verify1', 'verify2'] as const;
+
+  it('builds the same points per model and stage as scoreRun, and fits the same thresholds', async () => {
+    const { run, records, st, task, rows, models } = await loaded(makeRoot(), 'run-calib-big', [], exploreRunLarge);
+    expect(rows).toHaveLength(80);
+    expect(models).toEqual([JEV, CLEF]);
+    const scored = await scoreRun({
+      dir: run.dir, task, records, labelColumn: 'label', st, runModels: { triage: JEV, verify: JEV },
+      models: [{ id: JEV, decide: never }, { id: CLEF, decide: never }], ledgerOnly: true,
+    });
+    const view = (p: { score: number; correct: boolean }) => [p.score, p.correct];
+    for (const m of scored) {
+      for (const stage of STAGES) {
+        expect(m.points[stage].length, `${m.model} ${stage}`).toBeGreaterThan(20);
+        expect(stagePoints(rows, m.model, stage).map(view), `${m.model} ${stage}`).toEqual(m.points[stage].map(view));
+      }
+    }
+    // the fixture covers the cases that matter: abstentions, unparsed writer outputs, missing scores, 4-decimal scores
+    expect(rows.some((r) => r.triage[JEV]!.p === null)).toBe(true);
+    expect(rows.some((r) => r.w1.correct === null)).toBe(true);
+    expect(rows.filter((r) => r.w1.correct !== null && !(CLEF in r.verify1)).length).toBeGreaterThan(0);
+    expect(stagePoints(rows, CLEF, 'triage').some((p) => p.score.toFixed(2) !== p.score.toString())).toBe(true);
+
+    const jev = scored.find((m) => m.model === JEV)!;
+    const clef = scored.find((m) => m.model === CLEF)!;
+    for (const target of [0.8, 0.9, 0.95, 0.99]) {
+      expect(refitThresholds(rows, { triage: JEV, verify: CLEF }, target), `target ${target}`).toEqual({
+        t0: fitThreshold(jev.points.triage, target).threshold,
+        t1: fitThreshold(clef.points.verify1, target).threshold,
+        t2: fitThreshold(clef.points.verify2, target).threshold,
+      });
+      expect(refitThresholds(rows, { triage: CLEF, verify: JEV }, target), `target ${target}`).toEqual({
+        t0: fitThreshold(clef.points.triage, target).threshold,
+        t1: fitThreshold(jev.points.verify1, target).threshold,
+        t2: fitThreshold(jev.points.verify2, target).threshold,
+      });
+    }
+    // the fits are real cuts at a reachable target and "never" at an unreachable one
+    const t = refitThresholds(rows, { triage: JEV, verify: CLEF }, 0.8);
+    expect(t.t0).toBeGreaterThan(0.5);
+    expect(t.t0).toBeLessThanOrEqual(1);
+    expect(refitThresholds(rows, JEV_JEV, 1.001)).toEqual({ t0: NEVER, t1: NEVER, t2: NEVER }); // no cut can reach it
+    expect(NEVER).toBe(CAL_NEVER);
+  });
+
+  it('refits the bench target to the thresholds the bench ran with, and replays to its precision', async () => {
+    const { rows } = await loaded(makeRoot(), 'run-calib-big', [], exploreRunLarge);
+    const target = 0.95;
+    const fitted = refitThresholds(rows, JEV_JEV, target);
+    const r = replay(rows, JEV_JEV, fitted);
+    // every stage that accepts anything does so at or above the target, measured the way calibrate measures it
+    for (const [stage, th] of [['triage', fitted.t0], ['verify1', fitted.t1], ['verify2', fitted.t2]] as const) {
+      const pts = stagePoints(rows, JEV, stage);
+      const acc = pts.filter((p) => p.score > 0 && p.score >= th);
+      if (th <= 1) expect(acc.filter((p) => p.correct).length / acc.length, stage).toBeGreaterThanOrEqual(target);
+    }
+    expect(r.accepted).toBeGreaterThan(0);
+  });
+
+  it('on the 9-row fixture (fewer than 10 rows per stage) every stage is "never"', async () => {
+    const { rows } = await loaded(makeRoot());
+    expect(refitThresholds(rows, JEV_JEV, 0.95)).toEqual({ t0: NEVER, t1: NEVER, t2: NEVER });
+  });
+});
+
+describe('the 100-row waffle and its sentence', () => {
+  it('rounds shares to whole squares that always sum to 100', () => {
+    expect(roundToTotal([0.5, 0.5])).toEqual([50, 50]);
+    expect(roundToTotal([1 / 3, 1 / 3, 1 / 3])).toEqual([34, 33, 33]);
+    expect(roundToTotal([0.915, 0.055, 0.03])).toEqual([92, 5, 3]);
+    expect(roundToTotal([0.004, 0.004, 0.992])).toEqual([1, 0, 99]); // equal remainders: the earlier share gets the square
+    expect(roundToTotal([0, 0, 1])).toEqual([0, 0, 100]);
+    for (let i = 0; i < 200; i++) {
+      const a = (i * 37) % 101 / 100;
+      const b = ((i * 53) % 101 / 100) * (1 - a);
+      const out = roundToTotal([a, b, 1 - a - b]);
+      expect(out.reduce((x, y) => x + y, 0)).toBe(100);
+      expect(out.every((x) => x >= 0)).toBe(true);
+    }
+  });
+
+  it('counts right, wrong and to-check squares from a replay', () => {
+    expect(waffleCounts({ n: 1000, accepted: 975, acceptedCorrect: 932, flagged: 25 })).toEqual({ right: 93, wrong: 4, check: 3 });
+    expect(waffleCounts({ n: 9, accepted: 7, acceptedCorrect: 5, flagged: 2 })).toEqual({ right: 56, wrong: 22, check: 22 });
+    expect(waffleCounts({ n: 0, accepted: 0, acceptedCorrect: 0, flagged: 0 })).toEqual({ right: 0, wrong: 0, check: 100 });
+  });
+
+  it('writes the sentence from the same counts, never claiming more than the squares show', () => {
+    expect(outcomeSentence({ n: 1000, accepted: 975, acceptedCorrect: 932, flagged: 25 })).toBe(
+      'Out of every 100 rows, about 97 are answered automatically — about 4 of those are wrong — and 3 come to you to check.',
+    );
+    expect(outcomeSentence({ n: 1000, accepted: 1000, acceptedCorrect: 1000, flagged: 0 })).toBe(
+      'Out of every 100 rows, about 100 are answered automatically — none of those are wrong — and none come to you to check.',
+    );
+    expect(outcomeSentence({ n: 1000, accepted: 500, acceptedCorrect: 498, flagged: 500 })).toBe(
+      'Out of every 100 rows, about 50 are answered automatically — fewer than 1 of those is wrong — and 50 come to you to check.',
+    );
+    expect(outcomeSentence({ n: 1000, accepted: 990, acceptedCorrect: 980, flagged: 10 })).toBe(
+      'Out of every 100 rows, about 99 are answered automatically — about 1 of those is wrong — and 1 comes to you to check.',
+    );
+    expect(outcomeSentence({ n: 50, accepted: 0, acceptedCorrect: 0, flagged: 50 })).toBe(
+      'Out of every 100 rows, none are answered automatically: all 100 come to you to check.',
+    );
+  });
+});
+
+describe('plain names', () => {
+  it('names models and configurations for people', () => {
+    expect(['typesafe/jev-1.14', 'cloudflare/clef', 'openai/gpt-6-luna-decisions', 'anthropic/claude-haiku-5.5:batch', 'anthropic/claude-sonnet-5.5:batch', 'anthropic/claude-opus-5.5:batch', 'acme/widget-9:batch'].map(friendlyModel)).toEqual([
+      'Jev', 'Clef', 'Luna', 'Haiku', 'Sonnet', 'Opus', 'Widget-9',
+    ]);
+    const clef = { name: 'clef', triage: CLEF, verify: CLEF };
+    const mix = { name: 'jev+clef', triage: JEV, verify: CLEF };
+    const base = { name: 'baseline', triage: null, verify: null };
+    expect([clef, mix].map((c) => friendlyConfig(c))).toEqual(['Clef', 'Jev + Clef']);
+    expect(friendlyConfig(base, 'anthropic/claude-opus-5.5:batch')).toBe('Opus on every row');
+    expect(friendlyConfig(base, null)).toBe('Baseline');
+    expect([clef, mix].map((c) => configDescription(c))).toEqual(['Clef answers, Clef checks', 'Jev answers, Clef checks']);
+    expect(configDescription(base, 'anthropic/claude-opus-5.5:batch')).toBe('Opus answers every row, nothing is checked');
+  });
+
+  it('highlights the configuration that automates the most at the target, else the most precise', () => {
+    const cfg = (name: string, precision: number, autoAcceptShare: number, ours = true) => ({ name, triage: ours ? JEV : null, verify: ours ? JEV : null, precision, autoAcceptShare });
+    expect(bestConfig([cfg('jev', 0.954, 0.57), cfg('clef', 0.956, 0.97), cfg('luna', 0.99, 0.05), cfg('mix', 0.944, 0.74), cfg('baseline', 1, 1, false)], 0.95)).toBe('clef');
+    expect(bestConfig([cfg('a', 0.9, 0.9), cfg('b', 0.93, 0.5), cfg('baseline', 1, 1, false)], 0.95)).toBe('b');
+    expect(bestConfig([cfg('baseline', 1, 1, false)], 0.95)).toBeNull();
+  });
+});
+
+describe('explore tabs in the URL', () => {
+  it('reads ?tab= on the explore route only, and keeps the old URL', () => {
+    expect(parseHash('#/benches/bench-x/explore?tab=results')).toEqual({ page: 'explore', id: 'bench-x', tab: 'results' });
+    expect(parseHash(exploreHref('bench-x', 'method'))).toEqual({ page: 'explore', id: 'bench-x', tab: 'method' });
+    expect(exploreHref('bench-x')).toBe('#/benches/bench-x/explore');
+    expect(parseHash('#/benches/bench-x/explore?')).toEqual({ page: 'explore', id: 'bench-x' });
+    expect(parseHash('#/benches/bench-x?tab=results')).toEqual({ page: 'bench', id: 'bench-x' });
+    expect(parseHash('#/?tab=x')).toEqual({ page: 'home' });
   });
 });
