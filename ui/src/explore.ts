@@ -1,5 +1,6 @@
 import { fitThreshold, type Point } from '../../src/calibrate.ts';
 import type { ExploreCostPer1k, ExploreRow } from '../../src/ui/api-types.ts';
+import { formatPct } from './format.ts';
 
 // The threshold replay behind the results explorer. Pure, so the browser runs it on every slider move.
 // It must stay equivalent to `computeOutcomes` in src/pipeline.ts on a `collect` run (every row went
@@ -264,4 +265,23 @@ export function bestConfig(configs: ReadonlyArray<ConfigLike & { precision: numb
     else if (onTarget.length ? c.autoAcceptShare > best.autoAcceptShare : c.precision > best.precision) best = c;
   }
   return best?.name ?? null;
+}
+
+// ---------------------------------------------------------------- setup cards and cost wording
+
+/** The stats line on a setup card. Only the automatic share: the "right" figure is in the tiles, on the same rows the sliders use. */
+export function cardStats(autoAcceptShare: number): string {
+  return `${formatPct(autoAcceptShare)} answered automatically`;
+}
+
+/** Visible tag after a cost figure; only when the bench's costs were recorded without prompt caching (`pricingNote` set). */
+export function uncachedTag(pricingNote: string | null | undefined): string | null {
+  return pricingNote ? '(uncached)' : null;
+}
+
+/** The one footnote line for every cost figure; null when `pricingNote` is not set. */
+export function costFootnoteText(pricingNote: string | null | undefined): string | null {
+  return pricingNote
+    ? '* Costs as recorded in this benchmark, without prompt caching. Caching makes the writing steps about 85–90% cheaper, which matters most for setups that write every row, like Opus answering every row; the decision-model steps cost the same. See the README’s Cost section for cached numbers.'
+    : null;
 }

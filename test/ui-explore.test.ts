@@ -15,6 +15,8 @@ import { CLEF, EXPLORE_ROWS, exploreBench, exploreRun, exploreRunLarge, JEV, mak
 import { exploreHref, parseHash } from '../ui/src/hooks.ts';
 import {
   bestConfig,
+  cardStats,
+  costFootnoteText,
   configDescription,
   coverageCurve,
   friendlyConfig,
@@ -25,6 +27,7 @@ import {
   replay,
   roundToTotal,
   stagePoints,
+  uncachedTag,
   waffleCounts,
   type Controller,
   type Thresholds,
@@ -380,6 +383,24 @@ describe('plain names', () => {
     expect(bestConfig([cfg('jev', 0.954, 0.57), cfg('clef', 0.956, 0.97), cfg('luna', 0.99, 0.05), cfg('mix', 0.944, 0.74), cfg('baseline', 1, 1, false)], 0.95)).toBe('clef');
     expect(bestConfig([cfg('a', 0.9, 0.9), cfg('b', 0.93, 0.5), cfg('baseline', 1, 1, false)], 0.95)).toBe('b');
     expect(bestConfig([cfg('baseline', 1, 1, false)], 0.95)).toBeNull();
+  });
+});
+
+describe('setup cards and uncached cost wording', () => {
+  it('setup cards state only the automatic share, never a "right" figure', () => {
+    expect(cardStats(0.97)).toBe('97% answered automatically');
+    expect(cardStats(0.97).toLowerCase()).not.toContain('right');
+  });
+
+  it('tags costs as uncached, with the footnote, only when pricingNote is set', () => {
+    expect(uncachedTag(PRICING_NOTE)).toBe('(uncached)');
+    expect(costFootnoteText(PRICING_NOTE)).toBe(
+      '* Costs as recorded in this benchmark, without prompt caching. Caching makes the writing steps about 85–90% cheaper, which matters most for setups that write every row, like Opus answering every row; the decision-model steps cost the same. See the README’s Cost section for cached numbers.',
+    );
+    for (const none of [null, undefined, '']) {
+      expect(uncachedTag(none)).toBeNull();
+      expect(costFootnoteText(none)).toBeNull();
+    }
   });
 });
 

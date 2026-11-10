@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerE
 import type { ExploreConfigResult, ExploreCostPer1k, ExploreReliability, ExploreResponse } from '../../../src/ui/api-types.ts';
 import {
   bestConfig,
+  cardStats,
   configDescription,
+  costFootnoteText,
   controllersFor,
   coverageCurve,
   friendlyConfig,
@@ -11,6 +13,7 @@ import {
   outcomeSentence,
   refitThresholds,
   replay,
+  uncachedTag,
   waffleCounts,
   type Controller,
   type CurvePoint,
@@ -160,16 +163,26 @@ const baselineOf = (d: ExploreResponse) => d.results.configs.find((c) => c.name 
 
 /** One footnote for every cost figure on the page, when the bench's writer costs were recorded without caching. */
 function CostFootnote({ d }: { d: ExploreResponse }) {
-  if (!d.calibration?.pricingNote) return null;
+  const text = costFootnoteText(d.calibration?.pricingNote);
+  if (!text) return null;
   return (
     <p className="small muted footnote" id="cost-note">
-      * Costs as recorded in this benchmark, without prompt caching. With caching, the writing steps are about 85–90% cheaper; the decision-model
-      steps cost the same.
+      {text}
     </p>
   );
 }
 
-const Star = ({ d }: { d: ExploreResponse }) => (d.calibration?.pricingNote ? <a href="#cost-note" className="star" aria-label="see the cost footnote">*</a> : null);
+const Star = ({ d }: { d: ExploreResponse }) => {
+  const tag = uncachedTag(d.calibration?.pricingNote);
+  if (!tag) return null;
+  return (
+    <>
+      {' '}
+      <span className="uncached">{tag}</span>
+      <a href="#cost-note" className="star" aria-label="see the cost footnote">*</a>
+    </>
+  );
+};
 
 // ---------------------------------------------------------------- 1. Try it
 
@@ -241,7 +254,7 @@ function TryItInner({ d }: { d: ExploreResponse }) {
                 </span>
                 <span className="pick-desc">{configDescription(p)}</span>
                 <span className="pick-stats num">
-                  {formatPct(p.autoAcceptShare)} answered automatically · {formatPct(p.precision)} right
+                  {cardStats(p.autoAcceptShare)}
                 </span>
               </label>
             );
