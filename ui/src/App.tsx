@@ -29,7 +29,7 @@ export function App() {
       route.page === 'review'
         ? `Review ${route.id} · TwoPass`
         : route.page === 'explore'
-          ? `Explore ${route.id} · TwoPass`
+          ? `What happens to your rows · ${route.id} · TwoPass`
         : route.page === 'run' ? `${route.id} · TwoPass` : route.page === 'bench' ? `${route.id} · TwoPass` : 'TwoPass · runs';
   }, [route]);
 
@@ -52,7 +52,7 @@ export function App() {
         {route.page === 'run' && <RunPage id={route.id} />}
         {route.page === 'review' && <ReviewPage id={route.id} />}
         {route.page === 'bench' && <BenchPage id={route.id} />}
-        {route.page === 'explore' && <ExplorePage id={route.id} />}
+        {route.page === 'explore' && <ExplorePage id={route.id} tab={route.tab} />}
         {route.page === 'notfound' && (
           <>
             <h1>Page not found</h1>

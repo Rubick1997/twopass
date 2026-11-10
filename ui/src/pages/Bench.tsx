@@ -31,8 +31,11 @@ export function BenchPage({ id }: { id: string }) {
       <ErrorNote error={bench.error} />
       <SpendVsCap spent={b.spentUsd} cap={b.maxUsd} scope="run" />
       {b.hasReport && (
-        <p>
-          <a href={exploreHref(b.benchId)}>Explore results: thresholds, accuracy at coverage, reliability</a>
+        <p className="explore-cta">
+          <a href={exploreHref(b.benchId)} className="button button-primary">
+            Explore results
+          </a>{' '}
+          <span className="muted small">what happens to your rows, per setup and accuracy target</span>
         </p>
       )}
       {b.resumeCommand && (
