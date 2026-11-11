@@ -50,13 +50,14 @@ git clone https://github.com/Rubick1997/twopass.git && cd twopass
 pnpm install
 export OPENROUTER_API_KEY=sk-or-...
 
-# a small end-to-end benchmark: about $0.60, capped at $1 by --max-usd
+# a small end-to-end benchmark: about $0.20 (it cost $0.18 on 2026-11-10), capped at $1 by --max-usd
 # (the first run also downloads Banking77, a minute or two)
 node src/cli.ts bench banking77 --calibration-size 60 --test-size 40 --max-usd 1
 ```
 
 Almost all of the time is waiting for the provider's batch queue: several batch rounds, each 4–8 minutes on a quiet
-day and an hour or more on a busy one (see [Limitations](#limitations)). The command prints one line per batch and
+day and hours on a busy one: on 2026-11-10 the whole command took 8.5 hours, 7 of them on the first 60-row batch
+(see [Limitations](#limitations)). The command prints one line per batch and
 is silent while a batch waits. If you stop it, run the same command again with `--id <benchId>` (printed on the first
 line) and it continues without paying twice.
 
