@@ -27,7 +27,8 @@ import type { BenchReport } from '../bench.ts';
 import { readCalibration } from '../runner.ts';
 import type { ScoreRecord } from '../score.ts';
 import { loadRun, type RunManifest } from '../run.ts';
-import { batchDurationMs, median, spendByStage } from '../stats.ts';
+import { batchDurationMs, median, spendByStage, type StageSpend } from '../stats.ts';
+import { bucketsFromOpenRouter } from '../cost/usage.ts';
 import { loadTask, parseWriterOutput, render, type TaskDefinition } from '../task.ts';
 import { triageOutcome, verifyOutcome } from '../verdict.ts';
 import type {
@@ -42,6 +43,8 @@ import type {
   BenchReportResponse,
   ExpectedFinish,
   ExploreCalibration,
+  ExploreCaching,
+  RunCachingKind,
   ExploreResponse,
   ExploreRow,
   ExploreThresholds,
@@ -700,8 +703,102 @@ export function getBenchReport(runsRoot: string, benchId: string): BenchReportRe
 
 // ---------------------------------------------------------------- results explorer
 
-export const PRICING_NOTE =
-  'Writer costs as recorded in the calibration run (no prompt caching). With caching, Sonnet and Opus writing is about 85–90% cheaper; decision-model costs are unaffected.';
+/**
+ * Whether a run's writer calls used prompt caching. The manifest's `writerCache` (the task's `writer.cacheSystem`
+ * when the run was created) wins; runs made before it existed fall back to the ledger: `cached` if any writer
+ * result's raw usage has cache-read or cache-write tokens, `uncached` if there are results and none has, and
+ * `null` (unknown, no label) when there are no writer results. It never reads the live task file, which may have
+ * caching on for a run that had none.
+ */
+export function runCaching(manifest: Pick<RunManifest, 'writerCache'>, st: RunState): RunCachingKind | null {
+  if (manifest.writerCache !== undefined) return manifest.writerCache ? 'cached' : 'uncached';
+  if (st.results.size === 0) return null;
+  for (const r of st.results.values()) {
+    if (r.usage === undefined) continue;
+    try {
+      const b = bucketsFromOpenRouter(r.usage);
+      if (b.cacheRead > 0 || b.cacheWrite > 0) return 'cached';
+    } catch {
+      // usage that does not add up says nothing about caching
+    }
+  }
+  return 'uncached';
+}
+
+type CostStage = 'triage' | 'write1' | 'verify1' | 'write2' | 'verify2';
+
+/** What one test run spent per stage and how many rows went through each stage. */
+interface StageUse {
+  triageModel: string;
+  verifyModel: string;
+  spend: Record<CostStage, number>;
+  rows: Record<CostStage, number>;
+}
+
+function stageUseFromRun(manifest: RunManifest, st: RunState): StageUse {
+  const spend = spendByStage(st);
+  const count = (round: 1 | 2) => [...st.verify.values()].filter((d) => d.round === round).length;
+  const written = (round: 1 | 2) => [...st.results.values()].filter((r) => r.round === round).length;
+  return {
+    triageModel: manifest.models.triage,
+    verifyModel: manifest.models.verify,
+    spend,
+    rows: { triage: st.triage.size, write1: written(1), verify1: count(1), write2: written(2), verify2: count(2) },
+  };
+}
+
+/** The same, from a config's line in bench-report.json, when its run folder is missing. */
+function stageUseFromReport(c: BenchReport['configs'][number]): StageUse | null {
+  if (!c.triage || !c.verify || !c.costPer1k || !c.rows) return null;
+  const reach = { triage: c.rows, write1: c.rows * (1 - c.round0Share), verify1: c.rows * (1 - c.round0Share), write2: c.rows * c.escalatedShare, verify2: c.rows * c.escalatedShare };
+  const spend = Object.fromEntries((Object.keys(reach) as CostStage[]).map((k) => [k, (c.costPer1k[k] * c.rows) / 1000])) as Record<CostStage, number>;
+  return { triageModel: c.triage, verifyModel: c.verify, spend, rows: reach };
+}
+
+export interface UnitCosts {
+  triage: Record<string, number | null>;
+  verify1: Record<string, number | null>;
+  verify2: Record<string, number | null>;
+  write1: number | null;
+  write2: number | null;
+}
+
+/** Spend divided by rows reaching the stage, pooled over the runs that ran it; null where no run did. */
+export function unitCostsFrom(uses: readonly StageUse[]): UnitCosts {
+  const sums = new Map<string, { usd: number; rows: number }>();
+  const add = (key: string, usd: number, rows: number) => {
+    if (rows <= 0) return;
+    const e = sums.get(key) ?? { usd: 0, rows: 0 };
+    e.usd += usd;
+    e.rows += rows;
+    sums.set(key, e);
+  };
+  for (const u of uses) {
+    add(`triage|${u.triageModel}`, u.spend.triage, u.rows.triage);
+    add(`verify1|${u.verifyModel}`, u.spend.verify1, u.rows.verify1);
+    add(`verify2|${u.verifyModel}`, u.spend.verify2, u.rows.verify2);
+    add('write1', u.spend.write1, u.rows.write1);
+    add('write2', u.spend.write2, u.rows.write2);
+  }
+  const unit = (key: string) => {
+    const e = sums.get(key);
+    return e ? e.usd / e.rows : null;
+  };
+  const byModel = (stage: 'triage' | 'verify1' | 'verify2') =>
+    Object.fromEntries([...sums.keys()].filter((k) => k.startsWith(`${stage}|`)).map((k) => [k.slice(stage.length + 1), unit(k)]));
+  return { triage: byModel('triage'), verify1: byModel('verify1'), verify2: byModel('verify2'), write1: unit('write1'), write2: unit('write2') };
+}
+
+/** Replaces every per-row `usd` with this bench's unit cost for the stage (null where the bench has none). */
+export function repriceRows(rows: ExploreRow[], u: UnitCosts): void {
+  for (const r of rows) {
+    for (const m of Object.keys(r.triage)) r.triage[m]!.usd = u.triage[m] ?? null;
+    r.w1.usd = u.write1;
+    r.w2.usd = u.write2;
+    for (const m of Object.keys(r.verify1)) r.verify1[m]!.usd = u.verify1[m] ?? null;
+    for (const m of Object.keys(r.verify2)) r.verify2[m]!.usd = u.verify2[m] ?? null;
+  }
+}
 
 /** scores.jsonl as the scorer reads it: the last record per model, stage and row wins; a torn line is skipped. */
 export function readScoreRecords(dir: string): ScoreRecord[] {
@@ -828,9 +925,25 @@ export async function getBenchExplore(runsRoot: string, benchId: string): Promis
     }
   }
 
+  // The test run behind each report config: bench.json's testRuns, else the runId in the report.
+  const report = JSON.parse(readFileSync(reportPath, 'utf8')) as BenchReport;
+  const configs = report.configs ?? [];
+  const testDirs = new Map<string, string | null>();
+  for (const c of configs) {
+    const id = state.testRuns?.[c.name] ?? c.runId;
+    let d: string | null = null;
+    try {
+      if (id) d = resolveInside(runsRoot, id);
+    } catch {
+      d = null;
+    }
+    testDirs.set(c.name, d && existsSync(join(d, 'manifest.json')) ? d : null);
+  }
+
   const key = [
     reportPath,
     join(dir, 'bench.json'),
+    ...[...testDirs.values()].flatMap((d) => (d ? [join(d, 'manifest.json'), join(d, 'ledger.jsonl')] : [])),
     ...(calibDir ? [join(calibDir, 'manifest.json'), join(calibDir, 'ledger.jsonl'), join(calibDir, 'scores.jsonl')] : []),
   ]
     .map(statKey)
@@ -838,8 +951,6 @@ export async function getBenchExplore(runsRoot: string, benchId: string): Promis
   const hit = exploreCache.get(dir);
   if (hit && hit.key === key) return hit.value;
 
-  const report = JSON.parse(readFileSync(reportPath, 'utf8')) as BenchReport;
-  const configs = report.configs ?? [];
   const thresholdsByConfig: Record<string, ExploreThresholds> = {};
   for (const c of configs) if (c.thresholds) thresholdsByConfig[c.name] = c.thresholds;
   const fitsByModel: ExploreCalibration['fitsByModel'] = {};
@@ -850,6 +961,30 @@ export async function getBenchExplore(runsRoot: string, benchId: string): Promis
       if (typeof t === 'number') fits[stage] = t;
     }
     fitsByModel[model] = fits;
+  }
+
+  // Each config's own caching, and the per-stage use of the non-baseline test runs (for re-pricing).
+  const configCaching = new Map<string, ExploreCaching>();
+  const testUses: StageUse[] = [];
+  const testCaching: ExploreCaching[] = [];
+  for (const c of configs) {
+    const d = testDirs.get(c.name) ?? null;
+    let caching: ExploreCaching = null;
+    let use: StageUse | null = null;
+    if (d) {
+      try {
+        const run = await loadRunCached(d);
+        caching = runCaching(run.manifest, run.st);
+        if (run.manifest.mode !== 'baseline' && c.triage) use = stageUseFromRun(run.manifest, run.st);
+      } catch {
+        use = c.triage ? stageUseFromReport(c) : null;
+      }
+    } else if (c.triage) use = stageUseFromReport(c);
+    configCaching.set(c.name, caching);
+    if (use) {
+      testUses.push(use);
+      testCaching.push(caching);
+    }
   }
 
   let calibration: ExploreCalibration | null = null;
@@ -867,7 +1002,17 @@ export async function getBenchExplore(runsRoot: string, benchId: string): Promis
           runModels: { triage: run.manifest.models.triage, verify: run.manifest.models.verify },
           scores: readScoreRecords(calibDir),
         });
-        const results = [...run.st.results.values()];
+        const ownCalibration = !!state.calibrationRunId && !state.calibrationReused;
+        let costSource: ExploreCalibration['costSource'];
+        if (ownCalibration) {
+          costSource = { kind: 'calibration-run', caching: runCaching(run.manifest, run.st) };
+        } else {
+          // A calibration reused from another bench: its per-row costs are that bench's, so price the rows
+          // from this bench's own test runs.
+          repriceRows(rows, unitCostsFrom(testUses));
+          const kinds = new Set(testUses.flatMap((_, i) => (testCaching[i] ? [testCaching[i]!] : [])));
+          costSource = { kind: 'test-runs', caching: kinds.size > 1 ? 'mixed' : ([...kinds][0] ?? null) };
+        }
         calibration = {
           runId: run.manifest.runId,
           rows: rows.length,
@@ -875,8 +1020,7 @@ export async function getBenchExplore(runsRoot: string, benchId: string): Promis
           thresholdsByConfig,
           fitsByModel,
           data: rows,
-          // Ledgers before 2026-11-07 have no raw usage: their writer costs were recorded without caching.
-          pricingNote: results.length > 0 && results.every((r) => r.usage === undefined) ? PRICING_NOTE : null,
+          costSource,
         };
       }
     } catch (err) {
@@ -901,6 +1045,7 @@ export async function getBenchExplore(runsRoot: string, benchId: string): Promis
         flaggedShare: c.flaggedShare,
         accuracyNoHuman: c.accuracyNoHuman,
         costPer1k: c.costPer1k,
+        caching: configCaching.get(c.name) ?? null,
       })),
     },
     reliability: configs.flatMap((c) =>

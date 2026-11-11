@@ -37,7 +37,8 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p ui/tsconfig.json",
     "test": "vitest run",
     "fetch:banking77": "node scripts/fetch-banking77.ts",
-    "fake-live-run": "node scripts/fake-live-run.ts"
+    "fake-live-run": "node scripts/fake-live-run.ts",
+    "article-figures": "node scripts/article-figures.ts"
   },
   "dependencies": {
     "csv-parse": "^7.0.3",

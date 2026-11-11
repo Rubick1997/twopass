@@ -111,6 +111,7 @@ export async function startRun(o: StartRunOptions): Promise<{ dir: string; manif
     prices: pricesFrom(await loadModels(), writerModels),
     ...(o.maxUsd !== undefined ? { maxUsd: o.maxUsd } : {}),
     taskSha256: sha256File(o.taskPath),
+    writerCache: task.writer.cacheSystem ?? null,
     input: {
       originalSha256: check.report.input.sha256,
       normalizedSha256: check.report.output.sha256,

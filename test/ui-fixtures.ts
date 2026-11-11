@@ -25,7 +25,7 @@ export function makeRoot(): string {
 export function makeRun(
   root: string,
   runId: string,
-  o: { rows?: number; mode?: RunManifest['mode']; maxUsd?: number; createdAt?: string } = {},
+  o: { rows?: number; mode?: RunManifest['mode']; maxUsd?: number; createdAt?: string; writerCache?: RunManifest['writerCache'] } = {},
 ): { dir: string; ledger: Ledger; rowIds: string[] } {
   const n = o.rows ?? 4;
   const records = Array.from({ length: n }, (_, i) => ({
@@ -47,6 +47,7 @@ export function makeRun(
     prices: { [WRITER]: { inputPerToken: 1e-7, outputPerToken: 1e-6 }, [ESCALATION]: { inputPerToken: 1e-6, outputPerToken: 5e-6 } },
     ...(o.maxUsd !== undefined ? { maxUsd: o.maxUsd } : {}),
     taskSha256: sha256File(TASK),
+    ...(o.writerCache !== undefined ? { writerCache: o.writerCache } : {}),
   };
   const dir = join(root, runId);
   createRunDir(dir, manifest, records);
@@ -203,8 +204,18 @@ export const EXPLORE_ROWS = 9;
  * Costs: triage $0.001, verify $0.002, writer rows $0.0005 (round 1) and $0.004 (round 2).
  * With `usage: true` the writer results carry a raw `usage` object (a run priced with caching).
  */
-export function exploreRun(root: string, runId = 'run-calib', o: { usage?: boolean } = {}) {
-  const run = makeRun(root, runId, { rows: EXPLORE_ROWS, mode: 'collect' });
+export function exploreRun(
+  root: string,
+  runId = 'run-calib',
+  o: {
+    /** true: raw usage without cache tokens; 'cache': raw usage with cache-read tokens; absent: no usage (old ledger). */
+    usage?: boolean | 'cache';
+    /** The manifest's `writerCache`; absent: an old manifest without the field. */
+    writerCache?: RunManifest['writerCache'];
+    mode?: RunManifest['mode'];
+  } = {},
+) {
+  const run = makeRun(root, runId, { rows: EXPLORE_ROWS, mode: o.mode ?? 'collect', ...(o.writerCache !== undefined ? { writerCache: o.writerCache } : {}) });
   const { ledger } = run;
   const tri = (rowId: string, c: string, p: number) =>
     ledger.append({
@@ -220,7 +231,11 @@ export function exploreRun(root: string, runId = 'run-calib', o: { usage?: boole
     ledger.append({
       t: 'batch_result', batchId, round, model, customId: customId(rowId, round), rowId, ok: text !== null,
       ...(text !== null ? { text } : { error: 'boom' }), inputTokens: 500, outputTokens: 8,
-      ...(o.usage ? { usage: { prompt_tokens: 500, completion_tokens: 8 } } : {}),
+      ...(o.usage === 'cache'
+        ? { usage: { prompt_tokens: 500, completion_tokens: 8, prompt_tokens_details: { cached_tokens: 400 } } }
+        : o.usage
+          ? { usage: { prompt_tokens: 500, completion_tokens: 8 } }
+          : {}),
       costUsd: round === 1 ? 0.0005 : 0.004, at: iso(MIN),
     });
   const ans = (label: string) => JSON.stringify({ label });
@@ -289,9 +304,9 @@ export function exploreRun(root: string, runId = 'run-calib', o: { usage?: boole
 export function exploreBench(
   root: string,
   benchId: string,
-  o: { calibrationRunId?: string; calibrationPath?: string; calibrationReused?: boolean } = {},
+  o: { calibrationRunId?: string; calibrationPath?: string; calibrationReused?: boolean; testRuns?: Record<string, string> } = {},
 ) {
-  const dir = writeBench(root, benchId, {}, {
+  const dir = writeBench(root, benchId, o.testRuns ?? {}, {
     ...(o.calibrationRunId ? { calibrationRunId: o.calibrationRunId } : {}),
     ...(o.calibrationPath ? { calibrationPath: o.calibrationPath, calibrationReused: o.calibrationReused ?? false } : {}),
   });
@@ -307,13 +322,13 @@ export function exploreBench(
       benchId, createdAt: iso(0), calibrationRunId: o.calibrationRunId ?? 'run-calib', calibrationRows: EXPLORE_ROWS, target: 0.95,
       configs: [
         {
-          name: 'jev', runId: 'run-test', triage: JEV, verify: JEV, thresholds: { t0: 0.9, t1: 0.9, t2: 0.9 }, rows: 100,
+          name: 'jev', runId: o.testRuns?.jev ?? 'run-test', triage: JEV, verify: JEV, thresholds: { t0: 0.9, t1: 0.9, t2: 0.9 }, rows: 100,
           round0Share: 0.5, autoAcceptShare: 0.6, escalatedShare: 0.4, flaggedShare: 0.1, precision: 0.96, accuracyNoHuman: 0.94,
           triageTop1: 0.87, costPer1k, minutes: { round0: 1, rounds: [], total: 10 },
           calibration: [stage('triage'), stage('verify1'), stage('verify2')],
         },
         {
-          name: 'baseline', runId: 'run-base', triage: null, verify: null, thresholds: null, rows: 100, round0Share: 0,
+          name: 'baseline', runId: o.testRuns?.baseline ?? 'run-base', triage: null, verify: null, thresholds: null, rows: 100, round0Share: 0,
           autoAcceptShare: 1, escalatedShare: 0, flaggedShare: 0, precision: 0.95, accuracyNoHuman: 0.95, triageTop1: null,
           costPer1k: { ...costPer1k, total: 20 }, minutes: { round0: null, rounds: [], total: 10 }, calibration: [],
         },

@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { fitThreshold, NEVER as CAL_NEVER } from '../src/calibrate.ts';
@@ -9,14 +9,15 @@ import { matchesLabel } from '../src/report.ts';
 import { Ledger, replay as replayLedger } from '../src/ledger.ts';
 import { loadRun } from '../src/run.ts';
 import { loadTask } from '../src/task.ts';
-import { buildExploreRows, getBenchExplore, NotFoundError, PRICING_NOTE, readScoreRecords } from '../src/ui/api.ts';
+import { buildExploreRows, getBenchExplore, NotFoundError, readScoreRecords, repriceRows, runCaching, unitCostsFrom } from '../src/ui/api.ts';
 import { tempDir } from './helpers.ts';
-import { CLEF, EXPLORE_ROWS, exploreBench, exploreRun, exploreRunLarge, JEV, makeRoot, TASK, writeBench } from './ui-fixtures.ts';
+import { CLEF, EXPLORE_ROWS, exploreBench, exploreRun, exploreRunLarge, JEV, makeRoot, makeRun, TASK, writeBench } from './ui-fixtures.ts';
 import { exploreHref, parseHash } from '../ui/src/hooks.ts';
 import {
   bestConfig,
   cardStats,
-  costFootnoteText,
+  cachingTag,
+  costFootnoteLines,
   configDescription,
   coverageCurve,
   friendlyConfig,
@@ -27,7 +28,6 @@ import {
   replay,
   roundToTotal,
   stagePoints,
-  uncachedTag,
   waffleCounts,
   type Controller,
   type Thresholds,
@@ -130,8 +130,8 @@ describe('replay with another verify model', () => {
     const r = replay(rows, c, { t0: NEVER, t1: 0.9, t2: 0.9 });
     // only r2 has a clef verdict, and it accepts in round 1; everyone else is flagged (no clef entry at round 2)
     expect(r).toMatchObject({ accepted: 1, acceptedCorrect: 1, flagged: 8, round0: 0 });
-    expect(r.costPer1k.verify1).toBeCloseTo((1000 * 0.0002) / 9);
-    expect(r.costPer1k.verify2).toBe(0);
+    expect(r.costPer1k!.verify1).toBeCloseTo((1000 * 0.0002) / 9);
+    expect(r.costPer1k!.verify2).toBe(0);
   });
 });
 
@@ -141,15 +141,15 @@ describe('cost and coverage curve', () => {
     // t0 = 0.9: r1 and r4 stop in round 0. Others pay write1 ($0.0005) and verify1 ($0.002) ...
     const r = replay(rows, JEV_JEV, { t0: 0.9, t1: 0.9, t2: 0.9 });
     const k = (x: number) => (1000 * x) / 9;
-    expect(r.costPer1k.triage).toBeCloseTo(k(9 * 0.001));
-    expect(r.costPer1k.write1).toBeCloseTo(k(7 * 0.0005));
+    expect(r.costPer1k!.triage).toBeCloseTo(k(9 * 0.001));
+    expect(r.costPer1k!.write1).toBeCloseTo(k(7 * 0.0005));
     // verify1 is paid for the 7 rows that reach round 1, minus r6 and r7 (no parsed writer output: no verify call)
-    expect(r.costPer1k.verify1).toBeCloseTo(k(5 * 0.002));
+    expect(r.costPer1k!.verify1).toBeCloseTo(k(5 * 0.002));
     // round 2: r3, r5, r6, r7 (r2, r8, r9 accepted in round 1)
-    expect(r.costPer1k.write2).toBeCloseTo(k(4 * 0.004));
-    expect(r.costPer1k.verify2).toBeCloseTo(k(4 * 0.002));
-    expect(r.costPer1k.total).toBeCloseTo(
-      r.costPer1k.triage + r.costPer1k.write1 + r.costPer1k.verify1 + r.costPer1k.write2 + r.costPer1k.verify2,
+    expect(r.costPer1k!.write2).toBeCloseTo(k(4 * 0.004));
+    expect(r.costPer1k!.verify2).toBeCloseTo(k(4 * 0.002));
+    expect(r.costPer1k!.total).toBeCloseTo(
+      r.costPer1k!.triage + r.costPer1k!.write1 + r.costPer1k!.verify1 + r.costPer1k!.write2 + r.costPer1k!.verify2,
     );
   });
 
@@ -185,16 +185,17 @@ describe('GET /api/benches/:id/explore (getBenchExplore)', () => {
     expect(c.fitsByModel[JEV]).toEqual({ triage: 0.93, verify1: 0.91 });
     expect(c.data).toHaveLength(9);
     expect(Object.keys(c.data[0]!).sort()).toEqual(['id', 'triage', 'verify1', 'verify2', 'w1', 'w2']); // no text, no label
-    expect(c.pricingNote).toBe(PRICING_NOTE); // fixture results carry no usage
+    expect(c.costSource).toEqual({ kind: 'calibration-run', caching: 'uncached' }); // fixture results carry no usage, old manifest
+    expect(r.results.configs.map((x) => x.caching)).toEqual([null, null]); // the test run folders are not there
     // the response replays to the numbers computed from the ledger
     expect(replay(c.data, JEV_JEV, c.thresholdsByConfig.jev!)).toMatchObject({ accepted: 7, flagged: 2 });
   });
 
-  it('has no pricing note when the writer results carry usage', async () => {
+  it('labels the calibration run cached when its writer results carry cache tokens', async () => {
     const root = makeRoot();
-    exploreRun(root, 'run-calib', { usage: true });
+    exploreRun(root, 'run-calib', { usage: 'cache' });
     exploreBench(root, 'bench-x', { calibrationRunId: 'run-calib' });
-    expect((await getBenchExplore(root, 'bench-x')).calibration!.pricingNote).toBeNull();
+    expect((await getBenchExplore(root, 'bench-x')).calibration!.costSource).toEqual({ kind: 'calibration-run', caching: 'cached' });
   });
 
   it('404s an unknown bench and a bench without bench-report.json', async () => {
@@ -392,15 +393,182 @@ describe('setup cards and uncached cost wording', () => {
     expect(cardStats(0.97).toLowerCase()).not.toContain('right');
   });
 
-  it('tags costs as uncached, with the footnote, only when pricingNote is set', () => {
-    expect(uncachedTag(PRICING_NOTE)).toBe('(uncached)');
-    expect(costFootnoteText(PRICING_NOTE)).toBe(
-      '* Costs as recorded in this benchmark, without prompt caching. Caching makes the writing steps about 85–90% cheaper, which matters most for setups that write every row, like Opus answering every row; the decision-model steps cost the same. See the README’s Cost section for cached numbers.',
+  it('tags a cost by the caching of its own run, with a matching footnote', () => {
+    expect(cachingTag('cached')).toBe('(cached)');
+    expect(cachingTag('uncached')).toBe('(uncached)');
+    for (const none of [null, undefined]) expect(cachingTag(none)).toBeNull();
+    const uncachedLine =
+      '* Costs as recorded in this benchmark, without prompt caching. Caching makes the writing steps about 85–90% cheaper, which matters most for setups that write every row, like Opus answering every row; the decision-model steps cost the same. See the README’s Cost section for cached numbers.';
+    expect(costFootnoteLines(['uncached', 'uncached', null])).toEqual([uncachedLine]);
+    const cached = costFootnoteLines(['cached']);
+    expect(cached).toHaveLength(1);
+    expect(cached[0]).toMatch(/with prompt caching/);
+    expect(cached[0]).not.toMatch(/without/);
+    expect(costFootnoteLines(['cached', 'uncached'])).toEqual([cached[0], uncachedLine]);
+    expect(costFootnoteLines([null, undefined])).toEqual([]);
+  });
+
+  it('writes a caching label only inside cachingTag', () => {
+    const page = readFileSync('ui/src/pages/Explore.tsx', 'utf8');
+    const helpers = readFileSync('ui/src/explore.ts', 'utf8');
+    const label = /\((?:un)?cached\)/g;
+    expect(page.match(label)).toBeNull();
+    expect([...(helpers.match(label) ?? [])].sort()).toEqual(['(cached)', '(uncached)']);
+    expect(page).not.toMatch(/pricingNote|uncachedTag/);
+    expect(helpers).not.toMatch(/pricingNote|uncachedTag/);
+  });
+});
+
+describe('runCaching', () => {
+  const stOf = async (usage: boolean | 'cache' | undefined, writerCache?: '5m' | '1h' | null) => {
+    const run = exploreRun(makeRoot(), 'run-x', { ...(usage !== undefined ? { usage } : {}), ...(writerCache !== undefined ? { writerCache } : {}) });
+    const { manifest } = loadRun(run.dir);
+    return { manifest, st: replayLedger(new Ledger(join(run.dir, 'ledger.jsonl')).read()) };
+  };
+
+  it('uses the manifest field when present, whatever the ledger says', async () => {
+    let r = await stOf('cache', null); // cache tokens in the ledger, but the task had no caching
+    expect(runCaching(r.manifest, r.st)).toBe('uncached');
+    r = await stOf(undefined, '1h'); // no usage in the ledger, but caching was on
+    expect(runCaching(r.manifest, r.st)).toBe('cached');
+    r = await stOf(true, '5m');
+    expect(runCaching(r.manifest, r.st)).toBe('cached');
+  });
+
+  it('falls back to the ledger for old manifests', async () => {
+    let r = await stOf('cache');
+    expect(r.manifest.writerCache).toBeUndefined();
+    expect(runCaching(r.manifest, r.st)).toBe('cached');
+    r = await stOf(true); // usage without cache tokens
+    expect(runCaching(r.manifest, r.st)).toBe('uncached');
+    r = await stOf(undefined); // ledger from before raw usage was kept
+    expect(runCaching(r.manifest, r.st)).toBe('uncached');
+  });
+
+  it('is unknown (no label) without batch results', () => {
+    const run = makeRun(makeRoot(), 'run-empty');
+    const st = replayLedger([]);
+    expect(runCaching(loadRun(run.dir).manifest, st)).toBeNull();
+    expect(cachingTag(runCaching(loadRun(run.dir).manifest, st))).toBeNull();
+  });
+
+  it('does not read the live task file: the task now has caching on, an old run without usage stays uncached', async () => {
+    const task = await loadTask(TASK);
+    expect(task.writer.cacheSystem).toBeTruthy();
+    const r = await stOf(undefined);
+    expect(runCaching(r.manifest, r.st)).toBe('uncached');
+  });
+});
+
+describe('caching and costs on a bench that reused another bench\'s calibration', () => {
+  const U = { triage: 0.001, write1: 0.02 / 9, verify1: 0.002, write2: 0.01 / 9, verify2: 0.002 }; // exploreRun's own spend per row
+
+  function reuseBench(o: { testUsage: boolean | 'cache'; testCache?: '5m' | '1h' | null; calibUsage?: boolean | 'cache' }) {
+    const root = makeRoot();
+    exploreRun(root, 'run-other-calib', o.calibUsage === undefined ? {} : { usage: o.calibUsage });
+    exploreRun(root, 'run-test-jev', { usage: o.testUsage, ...(o.testCache !== undefined ? { writerCache: o.testCache } : {}) });
+    exploreRun(root, 'run-test-base', { usage: o.testUsage, mode: 'baseline', ...(o.testCache !== undefined ? { writerCache: o.testCache } : {}) });
+    const file = join(tempDir(), 'calibration.json');
+    writeFileSync(file, JSON.stringify({ runId: 'run-other-calib', target: 0.95, rows: 9, models: {} }));
+    exploreBench(root, 'bench-reuse', { calibrationPath: file, calibrationReused: true, testRuns: { jev: 'run-test-jev', baseline: 'run-test-base' } });
+    return root;
+  }
+
+  it('cached test runs on an uncached reused calibration: everything is cached', async () => {
+    const r = await getBenchExplore(reuseBench({ testUsage: 'cache', calibUsage: true }), 'bench-reuse');
+    expect(r.results.configs.map((c) => c.caching)).toEqual(['cached', 'cached']);
+    expect(r.calibration!.costSource).toEqual({ kind: 'test-runs', caching: 'cached' });
+    expect(cachingTag(r.calibration!.costSource.caching)).toBe('(cached)');
+    expect(r.results.configs.map((c) => cachingTag(c.caching))).toEqual(['(cached)', '(cached)']);
+  });
+
+  it('uncached test runs on a cached reused calibration: everything is uncached', async () => {
+    const r = await getBenchExplore(reuseBench({ testUsage: true, calibUsage: 'cache' }), 'bench-reuse');
+    expect(r.results.configs.map((c) => c.caching)).toEqual(['uncached', 'uncached']);
+    expect(r.calibration!.costSource).toEqual({ kind: 'test-runs', caching: 'uncached' });
+    expect(cachingTag(r.calibration!.costSource.caching)).toBe('(uncached)');
+  });
+
+  it('the manifest field of a test run wins over its ledger', async () => {
+    const r = await getBenchExplore(reuseBench({ testUsage: 'cache', testCache: null }), 'bench-reuse');
+    expect(r.results.configs.map((c) => c.caching)).toEqual(['uncached', 'uncached']);
+  });
+
+  it('a config whose run folder is missing has no caching', async () => {
+    const root = reuseBench({ testUsage: 'cache' });
+    rmSync(join(root, 'run-test-base'), { recursive: true });
+    const r = await getBenchExplore(root, 'bench-reuse');
+    expect(r.results.configs.map((c) => c.caching)).toEqual(['cached', null]);
+    expect(r.calibration!.costSource).toEqual({ kind: 'test-runs', caching: 'cached' });
+  });
+
+  it('prices the replay with unit costs from this bench\'s test runs, not the reused calibration rows', async () => {
+    const root = reuseBench({ testUsage: 'cache' });
+    const r = await getBenchExplore(root, 'bench-reuse');
+    const { data } = r.calibration!;
+    expect(data[0]!.w1.usd).toBeCloseTo(U.write1);
+    expect(data[0]!.triage[JEV]!.usd).toBeCloseTo(U.triage);
+    const t = { t0: 0.9, t1: 0.9, t2: 0.9 };
+    // rows reaching each stage at these thresholds: 9 triage, 7 write1, 5 verify1, 4 write2, 4 verify2
+    const expected = (1000 / 9) * (9 * U.triage + 7 * U.write1 + 5 * U.verify1 + 4 * U.write2 + 4 * U.verify2);
+    const got = replay(data, JEV_JEV, t).costPer1k!;
+    expect(got.total).toBeCloseTo(expected);
+    expect(got.write1).toBeCloseTo((1000 / 9) * 7 * U.write1);
+    // the calibration rows' own per-row costs ($0.0005 / $0.004 writers) would give something else
+    const own = (await loaded(makeRoot())).rows;
+    expect(replay(own, JEV_JEV, t).costPer1k!.total).not.toBeCloseTo(expected);
+  });
+
+  it('gives no number for a setup whose model this bench never ran', async () => {
+    const root = reuseBench({ testUsage: 'cache' });
+    writeFileSync(
+      join(root, 'run-other-calib', 'scores.jsonl'),
+      ['r1', 'r2'].map((rowId) => JSON.stringify({ model: CLEF, servedAs: CLEF, stage: 'triage', rowId, verdict: { type: 'choice', choice: 'card_arrival', probabilities: { card_arrival: 0.9, cannot_tell: 0.1 }, confidence: 0.9 }, costUsd: 0.004, latencyMs: 1 })).join('\n') + '\n',
     );
-    for (const none of [null, undefined, '']) {
-      expect(uncachedTag(none)).toBeNull();
-      expect(costFootnoteText(none)).toBeNull();
-    }
+    const { data, models } = (await getBenchExplore(root, 'bench-reuse')).calibration!;
+    expect(models).toContain(CLEF);
+    expect(data[0]!.triage[CLEF]!.usd).toBeNull();
+    expect(replay(data, { triage: CLEF, verify: JEV }, { t0: 0.5, t1: 0.9, t2: 0.9 }).costPer1k).toBeNull();
+    expect(replay(data, JEV_JEV, { t0: 0.9, t1: 0.9, t2: 0.9 }).costPer1k).not.toBeNull();
+  });
+
+  it('keeps the calibration run\'s own per-row costs when the calibration belongs to the bench', async () => {
+    const root = makeRoot();
+    exploreRun(root, 'run-calib');
+    exploreBench(root, 'bench-own', { calibrationRunId: 'run-calib' });
+    const { data } = (await getBenchExplore(root, 'bench-own')).calibration!;
+    expect(data[0]!.w1.usd).toBe(0.0005);
+    expect(data[0]!.triage[JEV]!.usd).toBe(0.001);
+  });
+
+  it('falls back to bench-report.json when the test run folders are missing', async () => {
+    const root = makeRoot();
+    exploreRun(root, 'run-other-calib');
+    const file = join(tempDir(), 'calibration.json');
+    writeFileSync(file, JSON.stringify({ runId: 'run-other-calib', target: 0.95, rows: 9, models: {} }));
+    exploreBench(root, 'bench-reuse', { calibrationPath: file, calibrationReused: true });
+    const { data, costSource } = (await getBenchExplore(root, 'bench-reuse')).calibration!;
+    expect(costSource).toEqual({ kind: 'test-runs', caching: null });
+    // report: rows 100, round0Share 0.5, escalatedShare 0.4, costPer1k 1/2/3/4/5
+    expect(data[0]!.triage[JEV]!.usd).toBeCloseTo((1 * 100) / 1000 / 100);
+    expect(data[0]!.w1.usd).toBeCloseTo((2 * 100) / 1000 / 50);
+    expect(data[0]!.verify1[JEV]!.usd).toBeCloseTo((3 * 100) / 1000 / 50);
+    expect(data[0]!.w2.usd).toBeCloseTo((4 * 100) / 1000 / 40);
+    expect(data[0]!.verify2[JEV]!.usd).toBeCloseTo((5 * 100) / 1000 / 40);
+  });
+
+  it('unitCostsFrom pools runs per model and leaves unused stages null', () => {
+    const use = (m: string, usd: number, rows: number) => ({
+      triageModel: m, verifyModel: m,
+      spend: { triage: usd, write1: 0, verify1: 0, write2: 0, verify2: 0 },
+      rows: { triage: rows, write1: 0, verify1: 0, write2: 0, verify2: 0 },
+    });
+    const u = unitCostsFrom([use('a', 1, 10), use('a', 3, 10), use('b', 1, 0)]);
+    expect(u.triage).toEqual({ a: 0.2 });
+    expect(u.write1).toBeNull();
+    const rows = [{ id: 'x', triage: { a: { p: 1, correct: true, usd: 9 }, b: { p: 1, correct: true, usd: 9 } }, w1: { correct: true, usd: 9 }, verify1: {}, w2: { correct: null, usd: 9 }, verify2: {} }];
+    repriceRows(rows, u);
+    expect(rows[0]).toMatchObject({ triage: { a: { usd: 0.2 }, b: { usd: null } }, w1: { usd: null }, w2: { usd: null } });
   });
 });
 

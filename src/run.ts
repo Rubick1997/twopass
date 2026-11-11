@@ -28,6 +28,8 @@ export interface RunManifest {
   maxUsd?: number;
   /** sha256 of the task file when the run started; resume refuses a changed file unless told otherwise. */
   taskSha256: string;
+  /** The task's `writer.cacheSystem` when the run was created (null: no caching). Absent in runs made before 2026-11-10. */
+  writerCache?: '5m' | '1h' | null;
   /** Every time the run was resumed with a changed task file. */
   taskChanges?: Array<{ at: string; sha256: string }>;
   /** The input CSV as checked and normalized before the run (absent in runs made before `check`). */
