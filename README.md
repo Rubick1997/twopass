@@ -7,6 +7,8 @@ On the full Banking77 test split, with Cloudflare's Clef as the controller:
 
 > **3,080 rows · 3,002 auto-accepted at 96% precision · 79 re-run · 78 need a look · $1.31 · 159 min**
 
+**Write-up:** [I built a tool to check AI's work. The most useful thing it says is "I'm not sure."](https://medium.com/@vinch1910/i-built-a-tool-to-check-ais-work-the-most-useful-thing-it-says-is-i-m-not-sure-f7d656efc286) — the story behind these numbers, including the cost comparison that didn't survive.
+
 That's 94.3% end-to-end accuracy for $0.43 per 1,000 rows. A frontier model (Claude Opus 5.5) answering every row
 got 88.1% for $0.45 per 1,000 rows. With prompt caching on both sides, TwoPass costs about the same as the frontier
 model and is about 6 points more accurate, with 2.5% of rows sent to a person. See [Results](#results), and the
