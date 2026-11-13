@@ -1,5 +1,5 @@
 import { fitThreshold, type Point } from '../../src/calibrate.ts';
-import type { ExploreCostPer1k, ExploreRow } from '../../src/ui/api-types.ts';
+import type { ExploreCaching, ExploreCostPer1k, ExploreRow } from '../../src/ui/api-types.ts';
 import { formatPct } from './format.ts';
 
 // The threshold replay behind the results explorer. Pure, so the browser runs it on every slider move.
@@ -36,7 +36,8 @@ export interface ReplayResult {
   flaggedShare: number;
   /** (correct accepted + correct flagged) / n, a flagged row answering with the round-2 writer's answer. */
   accuracyNoHuman: number;
-  costPer1k: ExploreCostPer1k;
+  /** Null when a step the replay needs has no recorded cost in this benchmark. */
+  costPer1k: ExploreCostPer1k | null;
 }
 
 export function replay(rows: readonly ExploreRow[], c: Controller, t: Thresholds): ReplayResult {
@@ -46,10 +47,15 @@ export function replay(rows: readonly ExploreRow[], c: Controller, t: Thresholds
   let flaggedCorrect = 0;
   let round0 = 0;
   const cost = { triage: 0, write1: 0, verify1: 0, write2: 0, verify2: 0 };
+  let unknownCost = false;
+  const pay = (stage: keyof typeof cost, usd: number | null | undefined) => {
+    if (usd === null) unknownCost = true;
+    else cost[stage] += usd ?? 0;
+  };
 
   for (const r of rows) {
     const tri = r.triage[c.triage];
-    cost.triage += tri?.usd ?? 0;
+    pay('triage', tri?.usd);
     if (tri && tri.p !== null && tri.p >= t.t0) {
       accepted++;
       round0++;
@@ -57,16 +63,16 @@ export function replay(rows: readonly ExploreRow[], c: Controller, t: Thresholds
       continue;
     }
     const v1 = r.verify1[c.verify];
-    cost.write1 += r.w1.usd;
-    cost.verify1 += v1?.usd ?? 0;
+    pay('write1', r.w1.usd);
+    pay('verify1', v1?.usd);
     if (r.w1.correct !== null && v1 && v1.p !== null && v1.p >= t.t1) {
       accepted++;
       if (r.w1.correct) acceptedCorrect++;
       continue;
     }
     const v2 = r.verify2[c.verify];
-    cost.write2 += r.w2.usd;
-    cost.verify2 += v2?.usd ?? 0;
+    pay('write2', r.w2.usd);
+    pay('verify2', v2?.usd);
     if (r.w2.correct !== null && v2 && v2.p !== null && v2.p >= t.t2) {
       accepted++;
       if (r.w2.correct) acceptedCorrect++;
@@ -98,7 +104,7 @@ export function replay(rows: readonly ExploreRow[], c: Controller, t: Thresholds
     precision: accepted ? acceptedCorrect / accepted : null,
     flaggedShare: n ? flagged / n : 0,
     accuracyNoHuman: n ? (acceptedCorrect + flaggedCorrect) / n : 0,
-    costPer1k,
+    costPer1k: unknownCost ? null : costPer1k,
   };
 }
 
@@ -274,14 +280,29 @@ export function cardStats(autoAcceptShare: number): string {
   return `${formatPct(autoAcceptShare)} answered automatically`;
 }
 
-/** Visible tag after a cost figure; only when the bench's costs were recorded without prompt caching (`pricingNote` set). */
-export function uncachedTag(pricingNote: string | null | undefined): string | null {
-  return pricingNote ? '(uncached)' : null;
+/**
+ * The one place a caching label is written. `caching` is the caching of the run(s) the cost figure came from
+ * (`runCaching` in src/ui/api.ts); unknown gets no label.
+ */
+export function cachingTag(caching: ExploreCaching | 'mixed' | undefined): string | null {
+  if (caching === 'cached') return '(cached)';
+  if (caching === 'uncached') return '(uncached)';
+  if (caching === 'mixed') return '(mixed caching)';
+  return null;
 }
 
-/** The one footnote line for every cost figure; null when `pricingNote` is not set. */
-export function costFootnoteText(pricingNote: string | null | undefined): string | null {
-  return pricingNote
-    ? '* Costs as recorded in this benchmark, without prompt caching. Caching makes the writing steps about 85–90% cheaper, which matters most for setups that write every row, like Opus answering every row; the decision-model steps cost the same. See the README’s Cost section for cached numbers.'
-    : null;
+/** Footnote lines for the cost figures on a page: one per kind of caching among them, none when all are unknown. */
+export function costFootnoteLines(kinds: Iterable<ExploreCaching | 'mixed' | undefined>): string[] {
+  const set = new Set(kinds);
+  const out: string[] = [];
+  if (set.has('cached') || set.has('mixed'))
+    out.push('* Costs recorded with prompt caching, so the writing steps were billed at the lower cached rate. The decision-model steps cost the same either way.');
+  if (set.has('uncached') || set.has('mixed'))
+    out.push(
+      '* Costs as recorded in this benchmark, without prompt caching. Caching makes the writing steps about 85–90% cheaper, which matters most for setups that write every row, like Opus answering every row; the decision-model steps cost the same. See the README’s Cost section for cached numbers.',
+    );
+  return out;
 }
+
+/** Shown instead of a cost when the replay needs a step this benchmark never ran. */
+export const NO_COST_TEXT = 'This benchmark has no cost for that setup.';

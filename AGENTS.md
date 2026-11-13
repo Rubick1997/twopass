@@ -106,9 +106,13 @@ explained once. User-facing text uses plain names (`friendlyModel`, `friendlyCon
 and the advanced section. The replay is `ui/src/explore.ts` (pure, runs in the browser) over compact `ExploreRow`s of the bench's
 *calibration run* (a `collect` run on held-out train rows; found through `calibrationRunId`, or the `runId` inside `calibrationPath`
 for a reused calibration; without the folder, `calibration: null` and a reason), and **must stay equivalent to `computeOutcomes`**:
-`test/ui-explore.test.ts` replays a fixture ledger both ways. Pricing-note rule: if the calibration run's `batch_result`s carry no
-`usage`, its writer costs were recorded without prompt caching, so `pricingNote` is set and the page marks every cost figure with
-an asterisk pointing at one footnote.
+`test/ui-explore.test.ts` replays a fixture ledger both ways. Caching-label rule: every cost carries the tag of the run(s) it came from, never one keyed on the calibration run. `runCaching`
+(`api.ts`) reads the manifest's `writerCache` (the task's `writer.cacheSystem` at creation) and, for older manifests, the ledger (any
+writer `usage` with cache tokens means cached; results without means uncached; no results means unknown, no tag); it never loads the live
+task file. `getBenchExplore` sets `caching` on each result config and a `costSource` on the calibration; `cachingTag` in `ui/src/explore.ts` is
+the only place a label is written (a test checks). If the calibration was reused from another bench, the server replaces the rows' per-row
+`usd` with unit costs from this bench's test runs (spend ÷ rows through each stage, per decision model; null where the bench never ran it,
+and then `replay().costPer1k` is null and the page says so).
 
 **The run lock.** `executeRun` writes `runs/<id>/run.lock` (`{ pid, startedAt, heartbeatAt }`), refreshes the heartbeat
 every 15 s, and removes it on normal exit, on errors and on SIGINT. A run counts as *running* only if the heartbeat is

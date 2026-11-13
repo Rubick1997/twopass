@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
-import type { ExploreConfigResult, ExploreCostPer1k, ExploreReliability, ExploreResponse } from '../../../src/ui/api-types.ts';
+import type { ExploreCaching, ExploreConfigResult, ExploreCostPer1k, ExploreReliability, ExploreResponse } from '../../../src/ui/api-types.ts';
 import {
   bestConfig,
   cardStats,
   configDescription,
-  costFootnoteText,
+  costFootnoteLines,
+  NO_COST_TEXT,
+  cachingTag,
   controllersFor,
   coverageCurve,
   friendlyConfig,
@@ -13,7 +15,6 @@ import {
   outcomeSentence,
   refitThresholds,
   replay,
-  uncachedTag,
   waffleCounts,
   type Controller,
   type CurvePoint,
@@ -161,19 +162,24 @@ function presetsOf(d: ExploreResponse, controllers: Controller[]): Preset[] {
 
 const baselineOf = (d: ExploreResponse) => d.results.configs.find((c) => c.name === 'baseline' && !c.triage && !c.verify) ?? null;
 
-/** One footnote for every cost figure on the page, when the bench's writer costs were recorded without caching. */
-function CostFootnote({ d }: { d: ExploreResponse }) {
-  const text = costFootnoteText(d.calibration?.pricingNote);
-  if (!text) return null;
+type Kind = ExploreCaching | 'mixed' | undefined;
+
+/** The footnote for the cost figures on a tab: one line per kind of caching among them. */
+function CostFootnote({ kinds }: { kinds: Kind[] }) {
+  const lines = costFootnoteLines(kinds);
+  if (!lines.length) return null;
   return (
-    <p className="small muted footnote" id="cost-note">
-      {text}
-    </p>
+    <div className="small muted footnote" id="cost-note">
+      {lines.map((t) => (
+        <p key={t}>{t}</p>
+      ))}
+    </div>
   );
 }
 
-const Star = ({ d }: { d: ExploreResponse }) => {
-  const tag = uncachedTag(d.calibration?.pricingNote);
+/** The caching tag (and footnote link) after a cost figure, from the caching of the run(s) it came from. */
+const Star = ({ caching }: { caching: Kind }) => {
+  const tag = cachingTag(caching);
   if (!tag) return null;
   return (
     <>
@@ -311,8 +317,14 @@ function TryItInner({ d }: { d: ExploreResponse }) {
             <p className="outcome-sentence" id="outcome-sentence" aria-live="polite">
               {outcomeSentence(now)}{' '}
               <span className="nowrap">
-                Cost: {formatUsd(now.costPer1k.total)} per 1,000 rows
-                <Star d={d} />.
+                {now.costPer1k ? (
+                  <>
+                    Cost: {formatUsd(now.costPer1k.total)} per 1,000 rows
+                    <Star caching={cal.costSource.caching} />.
+                  </>
+                ) : (
+                  NO_COST_TEXT
+                )}
               </span>
             </p>
             <ul className="legend waffle-legend" aria-hidden="true">
@@ -344,13 +356,13 @@ function TryItInner({ d }: { d: ExploreResponse }) {
               <p className="compare small">
                 For comparison, {friendlyConfig(base, d.baselineModel)}: {Math.round((1 - base.precision) * 100)} of 100 wrong, none sent to you,{' '}
                 {formatUsd(base.costPer1k.total)} per 1,000 rows
-                <Star d={d} /> (test split).
+                <Star caching={base.caching} /> (test split).
               </p>
             )}
           </div>
         </div>
         <p className="small muted">Measured on {cal.rows.toLocaleString('en-US')} example rows that weren’t used for the results above.</p>
-        <CostFootnote d={d} />
+        <CostFootnote kinds={[cal.costSource.caching, base?.caching]} />
       </section>
 
       <details className="card advanced">
@@ -501,7 +513,6 @@ function Results({ d }: { d: ExploreResponse }) {
                 <th scope="col" className="num">Right overall, if you check nothing</th>
                 <th scope="col" className="num">
                   Cost per 1,000 rows
-                  <Star d={d} />
                 </th>
               </tr>
             </thead>
@@ -517,7 +528,10 @@ function Results({ d }: { d: ExploreResponse }) {
                   <td className="num">{formatPct(c.precision, 1)}</td>
                   <td className="num">{formatPct(c.flaggedShare, 1)}</td>
                   <td className="num">{formatPct(c.accuracyNoHuman, 1)}</td>
-                  <td className="num">{formatUsd(c.costPer1k.total)}</td>
+                  <td className="num">
+                    {formatUsd(c.costPer1k.total)}
+                    <Star caching={c.caching} />
+                  </td>
                 </tr>
               ))}
               {base && (
@@ -530,7 +544,10 @@ function Results({ d }: { d: ExploreResponse }) {
                   <td className="num">{formatPct(base.precision, 1)}</td>
                   <td className="num">{formatPct(base.flaggedShare, 1)}</td>
                   <td className="num">{formatPct(base.accuracyNoHuman, 1)}</td>
-                  <td className="num">{formatUsd(base.costPer1k.total)}</td>
+                  <td className="num">
+                    {formatUsd(base.costPer1k.total)}
+                    <Star caching={base.caching} />
+                  </td>
                 </tr>
               )}
             </tbody>
@@ -545,7 +562,7 @@ function Results({ d }: { d: ExploreResponse }) {
           <Why label="What does “sent to you to check” mean?">No step was confident enough; the row comes to you with the stronger model’s best answer filled in.</Why>
           <Why label="What does “right overall, if you check nothing” mean?">If you took every answer as is, including the rows sent to you, this share would be right.</Why>
         </div>
-        <CostFootnote d={d} />
+        <CostFootnote kinds={d.results.configs.map((c) => c.caching)} />
       </section>
       <section aria-labelledby="cost-h">
         <h2 id="cost-h">Where the money goes</h2>
@@ -558,18 +575,17 @@ function Results({ d }: { d: ExploreResponse }) {
 function CostBars({ configs, baseline, d }: { configs: ExploreConfigResult[]; baseline: string | null; d: ExploreResponse }) {
   const rowH = 36;
   const left = 150;
-  const right = 64;
+  const right = 130;
   const W = 760;
   const sep = 14;
   const H = configs.length * rowH + 12 + (baseline ? sep : 0);
   const max = Math.max(...configs.map((c) => stageTotal(c.costPer1k)), 1e-9);
   const plotW = W - left - right;
-  const summary = configs.map((c) => `${friendlyConfig(c, d.baselineModel)} ${formatUsd(c.costPer1k.total)}`).join(', ');
+  const summary = configs.map((c) => [friendlyConfig(c, d.baselineModel), formatUsd(c.costPer1k.total), cachingTag(c.caching)].filter(Boolean).join(' ')).join(', ');
   return (
     <figure className="card viz">
       <figcaption className="card-title">
         Cost per 1,000 rows, by step
-        <Star d={d} />
       </figcaption>
       <Legend box items={STAGES.map((s, i) => ({ label: STEP[s], slot: i + 1 }))} />
       <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`Stacked bars of cost per 1,000 rows by step. ${summary}. A table follows.`} className="chart">
@@ -597,6 +613,7 @@ function CostBars({ configs, baseline, d }: { configs: ExploreConfigResult[]; ba
               })}
               <text x={x + 6} y={y + 15} className="ax-strong">
                 {formatUsd(c.costPer1k.total)}
+                {cachingTag(c.caching) && <tspan className="uncached">{` ${cachingTag(c.caching)}`}</tspan>}
               </text>
             </g>
           );
@@ -626,7 +643,10 @@ function CostBars({ configs, baseline, d }: { configs: ExploreConfigResult[]; ba
                       {formatUsd(c.costPer1k[s])}
                     </td>
                   ))}
-                  <td className="num">{formatUsd(c.costPer1k.total)}</td>
+                  <td className="num">
+                    {formatUsd(c.costPer1k.total)}
+                    <Star caching={c.caching} />
+                  </td>
                 </tr>
               ))}
             </tbody>

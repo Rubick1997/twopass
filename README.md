@@ -13,7 +13,8 @@ model and is about 6 points more accurate, with 2.5% of rows sent to a person. S
 [caveats](#limitations) before quoting this.
 
 Earlier numbers were higher because those runs had no prompt caching: every row paid full price for the same
-~1,940-token label list, which hit the Opus baseline hardest. Without prompt caching (2026-11-06): $0.48 vs $4.13 per 1k.
+~1,940-token label list, which hit the Opus baseline hardest. Without prompt caching (2026-11-06): $0.48 vs $4.13 per 1k,
+8.7× cheaper (8.68 from the unrounded costs, $0.47595 and $4.12959; the prices rounded to cents give 8.6).
 
 ## How it works
 
@@ -49,10 +50,16 @@ git clone https://github.com/Rubick1997/twopass.git && cd twopass
 pnpm install
 export OPENROUTER_API_KEY=sk-or-...
 
-# a small end-to-end benchmark: about $0.60 and 30–50 minutes, mostly waiting for batches
-# (the first run also downloads Banking77, ~5 min)
+# a small end-to-end benchmark: about $0.20 (it cost $0.18 on 2026-11-10), capped at $1 by --max-usd
+# (the first run also downloads Banking77, a minute or two)
 node src/cli.ts bench banking77 --calibration-size 60 --test-size 40 --max-usd 1
 ```
+
+Almost all of the time is waiting for the provider's batch queue: several batch rounds, each 4–8 minutes on a quiet
+day and hours on a busy one: on 2026-11-10 the whole command took 8.5 hours, 7 of them on the first 60-row batch
+(see [Limitations](#limitations)). The command prints one line per batch and
+is silent while a batch waits. If you stop it, run the same command again with `--id <benchId>` (printed on the first
+line) and it continues without paying twice.
 
 To run your own CSV:
 
@@ -117,10 +124,16 @@ every batch with its age, spend against the cap by stage, accepted / flagged / p
 and, with `OPENROUTER_API_KEY` set, your OpenRouter balance next to our estimate of the worst case OpenRouter holds for
 batches in flight. A bench shows its configurations side by side, plus its report.
 
-A finished bench also has a results explorer (`#/benches/<id>/explore`): the test-split table, cost by stage, and three
-sliders (t0, t1, t2) that replay the bench's held-out calibration rows under any thresholds and any decision-model
-combination, showing auto-accepted share, precision, share sent to a human, accuracy with no human and cost per 1k rows
-against the calibrated thresholds. It also draws accuracy at coverage and reliability charts.
+A finished bench also has a results explorer (`#/benches/<id>/explore`) with three tabs. **Try it** has one slider:
+how accurate the automatically accepted answers must be (80–99%). Moving it refits the thresholds on the bench's
+held-out calibration rows and shows, as 100 squares, how many rows are answered automatically and right, answered
+automatically but wrong, or sent to you, with the cost per 1,000 rows. **Results** is the test-split table and cost by
+step. **How it was tested** has the accuracy-at-coverage and reliability charts. Every cost is marked "(cached)" or
+"(uncached)" from the runs it came from.
+
+![The explorer's Try it tab on the cached bench: the accuracy slider at 95%, and 100 squares showing rows answered right, answered wrong, or sent to a person](docs-public/ui-explore-try-it.png)
+
+The squares replay the 1,000 calibration rows, so the shares differ slightly from the test-split results below.
 
 It calls no model, binds to 127.0.0.1, and never sends your key to the browser. Apart from review decisions (below), it
 only reads files. To try it without
@@ -203,15 +216,15 @@ Writer: Claude Haiku 5.5 (batch). Escalation: Claude Sonnet 5.5 (batch). All thr
 
 What the numbers say:
 
-- **Thresholds fitted on train held up on test.** Precision came in at 95.4–95.6% against a 95% target (94.4% for the mix).
+- **Thresholds fitted on train held up on test.** Precision came in at 95.4–95.7% against a 95% target (94.4% for the mix).
 - **The decision models are good at different jobs.** Clef is strong at picking the label itself (0.942 top-1). Jev
-  is cheaper and less accurate at it (0.781). Jev's reported 0.870 on Banking77 did not replicate with this prompt
+  is cheaper and less accurate at it (0.781). Jev's vendor-reported 0.870 on Banking77 did not replicate with this prompt
   format. Luna never reached 95% precision in round 0, so it sends almost everything to a human.
 - **Judging an answer in isolation is weak.** A verifier that saw only the message and one label let close-but-wrong
   labels through at 0.95+ confidence. Showing it all 77 labels fixed that.
 - **Caching erased most of the cost gap, not the accuracy gap.** Sonnet and Opus batch writing got about 85–90% cheaper
   with caching, and the Opus baseline is all batch writing. Clef's cost is almost all round-0 decision calls, which caching doesn't
-  touch, so Clef went from 8.7× cheaper than Opus to about 5% cheaper. The case for TwoPass on this task is now
+  touch, so Clef went from 8.7× cheaper than Opus to about 5% cheaper (both from unrounded costs: 8.68× and 1.05×). The case for TwoPass on this task is now
   accuracy and knowing which rows to check, not price.
 - **Escalation is still the biggest writing cost.** Sonnet re-runs dominate the writing cost in the Jev and Luna
   configurations; Clef settles almost everything in round 0.
@@ -230,6 +243,33 @@ re-run they matched to the cent.
 
 Always pass `--max-usd`. OpenRouter reserves each batch's worst case (every row at `max_tokens`) from your balance
 when the batch is submitted. On a small balance, add `--max-batch-rows 500` to send batches one at a time.
+
+## Figures cited in the article
+
+The write-up of this project cites a few figures that the tables above don't show. `node scripts/article-figures.ts`
+recomputes each one from the run files (`enriched.csv`, `ledger.jsonl`, `bench-report.json`), calls no model, and
+prints how each was computed; `--json` gives the unrounded values. Its output on the two benches above
+(without caching: `bench-2026-11-06-f417`; with caching: `bench-2026-11-08-5310`):
+
+| Figure | Value |
+|---|---|
+| Flagged rows where the pipeline's own answer was right (Clef, with caching) | 30 of 78 (38.5%) |
+| Rows accepted after a rewrite (round 1 or 2), and how many were right | 4 of 19 (21.1%) |
+| The checker's first pick alone (round-0 top-1, threshold ignored) | 2,911 of 3,080 (94.5%) |
+| The full pipeline, no human | 2,903 of 3,080 (94.3%) |
+| On the 1,000 rows Opus ran on: TwoPass / Opus | 945 (94.5%) / 881 (88.1%) |
+| Same rows: TwoPass right and Opus wrong / the reverse | 74 / 10 |
+| Answers that changed between the 6 Nov and 8 Nov runs: Opus | 19 of 1,000 (1.9%) |
+| Answers that changed between the 6 Nov and 8 Nov runs: TwoPass with Clef | 24 of 3,080 (0.8%) |
+| TwoPass and Opus giving different answers (same in both runs) | 91 of 1,000 (9.1%) |
+| Sent to a person with the other two checkers (6 Nov): Jev / Luna | 1,313 of 3,080 (42.6%) / 2,925 of 3,080 (95.0%) |
+| Paraphrase test, Clef: original / reworded / drop | 280 of 300 (93.3%) / 269 of 300 (89.7%) / 3.7 points |
+| Cost per 1,000 rows without caching: Clef / Opus | $0.47595 / $4.12959, ratio 8.68 (8.60 from the prices rounded to cents) |
+| Cost per 1,000 rows with caching: Clef / Opus | $0.42589 / $0.44810, ratio 1.05 |
+
+"8.7× cheaper" in this README and in the article is the unrounded ratio, 8.68. Clef's first-pick accuracy is 94.5% in the
+8 Nov run and 94.2% in the 6 Nov run; the decision model's answers vary slightly between runs. The run files themselves
+are not in the repository (`runs/` can hold API outputs), so the script needs your own copies to re-run.
 
 ## Limitations
 

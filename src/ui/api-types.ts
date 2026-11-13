@@ -380,16 +380,20 @@ export interface ExploreBin {
 }
 
 /** One calibration row, reduced to what the threshold replay needs (no message text, no labels). */
+/** Whether a run's writer calls used prompt caching; null when unknown (no writer results yet). */
+export type RunCachingKind = 'cached' | 'uncached';
+export type ExploreCaching = RunCachingKind | null;
+
 export interface ExploreRow {
   id: string;
   /** Per decision model: probability of its chosen label, or null if it chose cannot_tell / gave no answer. `correct`: chosen label == true label. */
-  triage: Record<string, { p: number | null; correct: boolean; usd: number }>;
+  triage: Record<string, { p: number | null; correct: boolean; usd: number | null }>;
   /** Round-1 writer. `correct` is null if the writer failed or its output did not parse (then this round cannot accept). */
-  w1: { correct: boolean | null; usd: number };
+  w1: { correct: boolean | null; usd: number | null };
   /** Per decision model: probability of "supported" if its choice was "supported", else null. */
-  verify1: Record<string, { p: number | null; usd: number }>;
-  w2: { correct: boolean | null; usd: number };
-  verify2: Record<string, { p: number | null; usd: number }>;
+  verify1: Record<string, { p: number | null; usd: number | null }>;
+  w2: { correct: boolean | null; usd: number | null };
+  verify2: Record<string, { p: number | null; usd: number | null }>;
 }
 
 export interface ExploreConfigResult {
@@ -403,6 +407,8 @@ export interface ExploreConfigResult {
   flaggedShare: number;
   accuracyNoHuman: number;
   costPer1k: ExploreCostPer1k;
+  /** Whether this config's own run used prompt caching (null: run folder missing or nothing to tell). */
+  caching: ExploreCaching;
 }
 
 export interface ExploreReliability {
@@ -425,8 +431,12 @@ export interface ExploreCalibration {
   /** The fitted threshold per model and stage (calibration.json), to preset a custom controller. */
   fitsByModel: Record<string, Partial<Record<'triage' | 'verify1' | 'verify2', number>>>;
   data: ExploreRow[];
-  /** Set when the writer costs in the calibration run were recorded before prompt caching. */
-  pricingNote: string | null;
+  /**
+   * Where the per-row costs in `data` come from. `calibration-run`: the bench's own calibration run (recorded
+   * per row). `test-runs`: the calibration was reused from another bench, so `usd` holds unit costs from this
+   * bench's test runs (null where this bench never ran that model or stage).
+   */
+  costSource: { kind: 'calibration-run' | 'test-runs'; caching: ExploreCaching | 'mixed' };
 }
 
 export interface ExploreResponse {
