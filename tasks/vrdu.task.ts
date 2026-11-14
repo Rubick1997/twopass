@@ -9,11 +9,22 @@ import { defineTask } from '../src/task.ts';
 // The dataset spells it "foreign_principle_name"; the key is kept as is.
 const FIELD_INFO: Record<VrduField, { label: string; description: string }> = {
   file_date: { label: 'date of signature', description: 'the date written next to the signature at the end of the form' },
-  foreign_principle_name: { label: 'foreign principal name', description: 'the name of the foreign principal entered in the form' },
+  // Dev split, 2026-11-14: the labels hold the whole foreign-principal box (name plus any location line), and
+  // only on forms that have that box; a mention elsewhere in the text is not labelled. Titles are labelled
+  // only where the form has a title line.
+  foreign_principle_name: {
+    label: 'foreign principal entry',
+    description:
+      "the full contents of the form's foreign principal box, including any location line written in it; " +
+      'null when the form has no foreign principal box (a mention elsewhere in the text does not count)',
+  },
   registrant_name: { label: 'registrant name', description: 'the name of the registrant entered in the form' },
   registration_num: { label: 'registration number', description: 'the registration number entered in the form' },
-  signer_name: { label: 'signer name', description: 'the name of the person who signed the form' },
-  signer_title: { label: 'signer title', description: "the signer's title or position, as written with the signature" },
+  signer_name: { label: 'signer name', description: 'the printed or typed name of the person who signed the form' },
+  signer_title: {
+    label: 'signer title',
+    description: "the title entered on the form's title line beside the signature; null when the form has no title line",
+  },
 };
 
 const info = (field: string) => {
