@@ -256,7 +256,7 @@ export async function checkCsv(path: string, task: TaskDefinition, opts: CheckOp
     if (!idx.has(label)) {
       error('missing_label_column', `label column "${label}" is missing.${suggest(label, columns)}`);
     } else {
-      kept = checkLabels(kept, idx.get(label)!, label, task.writer.outputSchema, changes, error, warn);
+      kept = checkLabels(kept, idx.get(label)!, label, task.writer.outputSchema, changes, error, warn, task.extract?.fields);
     }
   }
 
@@ -488,6 +488,17 @@ export function enumOptions(schema: z.ZodType): string[] | undefined {
   return s.options.filter((o): o is string => typeof o === 'string');
 }
 
+/** An extraction label: a JSON object whose keys are field names and whose values are arrays of strings. */
+function isGoldCell(v: string, fields: readonly string[]): boolean {
+  try {
+    const o: unknown = JSON.parse(v);
+    if (!o || typeof o !== 'object' || Array.isArray(o)) return false;
+    return Object.entries(o).every(([k, x]) => fields.includes(k) && Array.isArray(x) && x.every((y) => typeof y === 'string'));
+  } catch {
+    return false;
+  }
+}
+
 function checkLabels<T extends { n: number; cells: string[] }>(
   rows: T[],
   col: number,
@@ -496,6 +507,7 @@ function checkLabels<T extends { n: number; cells: string[] }>(
   changes: ChangeLog,
   error: (code: string, message: string, rows?: number[], count?: number) => void,
   warn: (code: string, message: string, rows: number[], count?: number) => void,
+  extractFields?: readonly string[],
 ): T[] {
   const options = enumOptions(schema);
   const byCanon = new Map<string, string[]>();
@@ -524,7 +536,7 @@ function checkLabels<T extends { n: number; cells: string[] }>(
       const b = bad.get(v) ?? { rows: [], candidates };
       b.rows.push(r.n);
       bad.set(v, b);
-    } else if (parseOutput(schema, v).ok) {
+    } else if (extractFields ? isGoldCell(v, extractFields) : parseOutput(schema, v).ok) {
       valid.push({ n: r.n, value: v });
     } else {
       const b = bad.get(v) ?? { rows: [], candidates: [] };
@@ -550,6 +562,7 @@ function checkLabels<T extends { n: number; cells: string[] }>(
   if (valid.length < 200) {
     warn('few_labeled_rows', `only ${plural(valid.length, 'labeled row')}; calibration needs at least 200 for stable thresholds`, [], valid.length);
   }
+  if (extractFields) return rows; // gold cells are unique per document: "rare label" does not apply
   const perLabel = new Map<string, number[]>();
   for (const v of valid) perLabel.set(v.value, [...(perLabel.get(v.value) ?? []), v.n]);
   const rare = [...perLabel.entries()].filter(([, ns]) => ns.length < 5).sort((a, b) => a[1].length - b[1].length);

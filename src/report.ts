@@ -6,7 +6,7 @@ import { foldOverrides, readOverrides, type FoldedOutcome, type OverrideRecord }
 import { computeOutcomes, type RowOutcome } from './pipeline.ts';
 import { loadRun, type RunManifest } from './run.ts';
 import { median } from './stats.ts';
-import { loadTask } from './task.ts';
+import { loadTask, type TaskDefinition } from './task.ts';
 
 /**
  * `answer` is always the pipeline's answer; `final_answer` is the reviewer's when there is one.
@@ -80,7 +80,16 @@ export interface RoundTiming {
   worstMinutes: number;
 }
 
-export function summarize(outcomes: RowOutcome[], st: RunState, labelColumn?: string, overrides: readonly OverrideRecord[] = []): Summary {
+/** Does this answer match this label cell? Closed-choice tasks compare strings; extraction tasks pass `documentCorrectness(task)`. */
+export type CorrectFn = (answer: string, label: string | undefined) => boolean;
+
+export function summarize(
+  outcomes: RowOutcome[],
+  st: RunState,
+  labelColumn?: string,
+  overrides: readonly OverrideRecord[] = [],
+  correct: CorrectFn = matchesLabel,
+): Summary {
   const accepted = outcomes.filter((o) => o.status === 'accepted');
   const summary: Summary = {
     rows: outcomes.length,
@@ -92,13 +101,13 @@ export function summarize(outcomes: RowOutcome[], st: RunState, labelColumn?: st
     spentUsd: st.spentUsd,
     minutes: st.firstAt && st.lastAt ? (Date.parse(st.lastAt) - Date.parse(st.firstAt)) / 60_000 : 0,
     rounds: roundTimings(st),
-    review: reviewSummary(foldOverrides(outcomes, overrides), labelColumn),
+    review: reviewSummary(foldOverrides(outcomes, overrides), labelColumn, correct),
   };
   const check = costCheck(st);
   if (check) summary.costCheck = check;
   if (labelColumn) {
-    const correct = accepted.filter((o) => matchesLabel(o.answer, o.data[labelColumn])).length;
-    summary.precision = { correct, of: accepted.length };
+    const right = accepted.filter((o) => correct(o.answer, o.data[labelColumn])).length;
+    summary.precision = { correct: right, of: accepted.length };
   }
   return summary;
 }
@@ -107,7 +116,7 @@ const norm = (s: string) => s.trim().toLowerCase();
 export const matchesLabel = (answer: string, label: string | undefined): boolean => !!label?.trim() && norm(answer) === norm(label);
 
 /** Review progress and, with labels, accuracy without and with the reviewer's answers. Pure. */
-export function reviewSummary(folded: readonly FoldedOutcome[], labelColumn?: string): ReviewSummary {
+export function reviewSummary(folded: readonly FoldedOutcome[], labelColumn?: string, correct: CorrectFn = matchesLabel): ReviewSummary {
   const s: ReviewSummary = { flagged: 0, reviewed: 0, remaining: 0, reviewedOther: 0, overridden: 0 };
   for (const o of folded) {
     if (o.pipelineStatus === 'flagged') {
@@ -119,8 +128,8 @@ export function reviewSummary(folded: readonly FoldedOutcome[], labelColumn?: st
   }
   if (labelColumn) {
     const labeled = folded.filter((o) => o.data[labelColumn]?.trim());
-    const correctNoHuman = labeled.filter((o) => matchesLabel(o.answer, o.data[labelColumn])).length;
-    const correctWithHuman = labeled.filter((o) => matchesLabel(o.finalAnswer, o.data[labelColumn])).length;
+    const correctNoHuman = labeled.filter((o) => correct(o.answer, o.data[labelColumn])).length;
+    const correctWithHuman = labeled.filter((o) => correct(o.finalAnswer, o.data[labelColumn])).length;
     const of = labeled.length;
     s.accuracy = {
       noHuman: of ? correctNoHuman / of : 0,
@@ -230,6 +239,7 @@ export function writeOutputs(runDir: string, outcomes: ReadonlyArray<RowOutcome 
 
 export interface RunReport {
   manifest: RunManifest;
+  task: TaskDefinition;
   st: RunState;
   outcomes: RowOutcome[];
   overrides: OverrideRecord[];
@@ -245,7 +255,7 @@ export async function loadReport(dir: string): Promise<RunReport> {
   const st = replay(existsSync(ledgerPath) ? parseLedger(readFileSync(ledgerPath, 'utf8'), ledgerPath) : []);
   const outcomes = computeOutcomes(st, { task, rows: records, thresholds: manifest.thresholds, mode: manifest.mode });
   const overrides = readOverrides(dir);
-  return { manifest, st, outcomes, overrides, folded: foldOverrides(outcomes, overrides) };
+  return { manifest, task, st, outcomes, overrides, folded: foldOverrides(outcomes, overrides) };
 }
 
 /** `twopass report --write` and the UI's "Write output files": rewrites enriched.csv and review.csv. */

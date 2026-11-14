@@ -5,6 +5,7 @@ import { DECISION_ALIASES, listBenches, parseConfigs, runBench } from './bench.t
 import { BudgetExceededError } from './budget.ts';
 import { CheckFailedError, checkCsv, DELIMITERS, formatCheckSummary, writeCheckOutputs, type Delimiter } from './check.ts';
 import { NEVER, type StageCalibration } from './calibrate.ts';
+import { documentCorrectness } from './extract/outcomes.ts';
 import { readOverrides } from './overrides.ts';
 import { BatchFailedError, TruncatedOutputError } from './pipeline.ts';
 import { costCheckLine, loadReport, reviewLine, summarize, summaryLine, writeOutputs } from './report.ts';
@@ -182,8 +183,8 @@ async function main(argv: string[]): Promise<number> {
     case 'report': {
       if (!target) throw new UsageError('report needs <runId>');
       const dir = runDir(runsRoot, target);
-      const { manifest, st, outcomes, overrides, folded } = await loadReport(dir);
-      printSummary(summarize(outcomes, st, values.label ?? manifest.labelColumn, overrides));
+      const { manifest, task, st, outcomes, overrides, folded } = await loadReport(dir);
+      printSummary(summarize(outcomes, st, values.label ?? manifest.labelColumn, overrides, documentCorrectness(task)));
       if (values.write) {
         writeOutputs(dir, folded, manifest.inputColumns);
         console.log(`wrote ${join(dir, 'enriched.csv')}, ${join(dir, 'review.csv')}`);
@@ -305,7 +306,8 @@ async function execute(
   });
   try {
     const { outcomes, st, manifest } = await executeRun(dir, { apiKey, ...o, log: (m) => console.log(m) });
-    printSummary(summarize(outcomes, st, manifest.labelColumn, readOverrides(dir)));
+    const task = await loadTask(manifest.taskPath);
+    printSummary(summarize(outcomes, st, manifest.labelColumn, readOverrides(dir), documentCorrectness(task)));
     console.log(`outputs: ${join(dir, 'enriched.csv')}, ${join(dir, 'review.csv')}`);
     return 0;
   } catch (err) {

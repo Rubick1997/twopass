@@ -22,6 +22,7 @@ import {
   readOverrides,
   type FoldedOutcome,
 } from '../overrides.ts';
+import { documentCorrectness } from '../extract/outcomes.ts';
 import { matchesLabel, reviewSummary, rewriteOutputs, summarize, type ReviewSummary } from '../report.ts';
 import type { BenchReport } from '../bench.ts';
 import { readCalibration } from '../runner.ts';
@@ -333,7 +334,7 @@ export async function getRun(runsRoot: string, runId: string, o: ApiOptions = {}
     activeStage,
     batches,
     spend: spendByStage(run.st),
-    precision: run.outcomes && m.labelColumn ? (summarize(run.outcomes, run.st, m.labelColumn).precision ?? null) : null,
+    precision: run.outcomes && m.labelColumn ? (summarize(run.outcomes, run.st, m.labelColumn, [], run.task ? documentCorrectness(run.task) : undefined).precision ?? null) : null,
     expectedFinish: expectedFinish({ status: item.status, st: run.st, stages, models: m.models, mode: m.mode, medians, nowMs }),
     reserveUsd: batches.reduce((n, b) => n + (b.reserveUsd ?? 0), 0),
     activity: item.activity,
@@ -1144,7 +1145,7 @@ function reviewOf(run: LoadedRun): FoldedRun | null {
   const hit = foldCache.get(run.dir);
   if (hit && hit.key === key) return hit;
   const folded = foldOverrides(run.outcomes, readOverrides(run.dir));
-  const result = { key, folded, summary: reviewSummary(folded, run.manifest.labelColumn) };
+  const result = { key, folded, summary: reviewSummary(folded, run.manifest.labelColumn, run.task ? documentCorrectness(run.task) : undefined) };
   foldCache.set(run.dir, result);
   return result;
 }
@@ -1340,6 +1341,6 @@ export async function postOverride(runsRoot: string, runId: string, body: unknow
 export async function postOutputs(runsRoot: string, runId: string, o: ApiOptions = {}): Promise<OutputsResponse> {
   const { run } = await reviewableRun(runsRoot, runId);
   const report = await rewriteOutputs(run.dir);
-  const summary = reviewSummary(report.folded, report.manifest.labelColumn);
+  const summary = reviewSummary(report.folded, report.manifest.labelColumn, documentCorrectness(report.task));
   return { written: ['enriched.csv', 'review.csv'], at: new Date(now(o)).toISOString(), counts: countsOf(summary, report.folded.length) };
 }

@@ -3,6 +3,7 @@ import { Budget, BudgetExceededError } from './budget.ts';
 import { priceUsage, type CacheTtl, type ModelPrice } from './cost/price.ts';
 import { bucketsFromOpenRouter } from './cost/usage.ts';
 import { asChoice, type DecisionModel, type DecisionState, type Questions } from './decide/model.ts';
+import { computeExtractOutcomes, unacceptedFields } from './extract/outcomes.ts';
 import { createLimiter } from './http.ts';
 import {
   customId,
@@ -13,7 +14,7 @@ import {
   type Round,
   type RunState,
 } from './ledger.ts';
-import { parseWriterOutput, render, verifyQuestion, verifyState, type Row, type TaskDefinition, type Thresholds } from './task.ts';
+import { parseExtraction, parseWriterOutput, render, verifyQuestion, verifyState, type Row, type TaskDefinition, type Thresholds } from './task.ts';
 import { triageOutcome, verifyOutcome, type Verdict } from './verdict.ts';
 
 // round 0: triage (decision model picks the answer itself, closed-choice tasks only)
@@ -113,13 +114,20 @@ export async function executePipeline(ctx: PipelineContext): Promise<RowOutcome[
   await verifyRound(ctx, 1, round1);
 
   st = state();
-  const round2 = round1.filter(
-    (r) => collect || !verifyOutcome(asChoice(st.verify.get(verifyKey(r.id, 1))?.answers.verdict), thresholds.t1).accepted,
-  );
+  const round2 = round1.filter((r) => collect || !acceptedAtRound(task, st, r.id, 1, thresholds.t1));
   await writerRound(ctx, 2, round2, ctx.escalationModel);
   await verifyRound(ctx, 2, round2);
 
   return computeOutcomes(state(), ctx);
+}
+
+/**
+ * Was this row accepted by round `round`'s verify step at `threshold`? One test for both task kinds:
+ * a closed-choice row is accepted when its one verdict passes; an extraction document when every field does.
+ */
+export function acceptedAtRound(task: TaskDefinition, st: RunState, rowId: string, round: 1 | 2, threshold: number): boolean {
+  if (task.extract) return unacceptedFields(task, st, rowId, round, threshold).length === 0;
+  return verifyOutcome(asChoice(st.verify.get(verifyKey(rowId, round))?.answers.verdict), threshold).accepted;
 }
 
 function log(ctx: PipelineContext, message: string) {
@@ -404,11 +412,28 @@ async function collectBatch(ctx: PipelineContext, batch: BatchInfo): Promise<voi
 
 async function verifyRound(ctx: PipelineContext, round: 1 | 2, rows: RowRecord[]): Promise<void> {
   const st = replay(ctx.ledger.read());
-  const question = verifyQuestion(ctx.task);
+  const ex = ctx.task.extract;
+  const question = ex ? undefined : verifyQuestion(ctx.task);
   const items: DecisionItem[] = [];
   for (const r of rows) {
     const res = st.results.get(customId(r.id, round));
     if (!res?.ok || st.verify.has(verifyKey(r.id, round))) continue;
+    if (ex) {
+      // One call per document, one question per field. Round 2 asks only about the fields round 1 did not accept
+      // (all of them in collect mode, which gathers calibration data).
+      const parsed = parseExtraction(ctx.task, res.text ?? '');
+      if (!parsed.ok) continue;
+      const fields = round === 1 || ctx.mode === 'collect' ? [...ex.fields] : unacceptedFields(ctx.task, st, r.id, 1, ctx.thresholds.t1);
+      if (!fields.length) continue;
+      items.push({
+        rowId: r.id,
+        round,
+        stage: 'verify',
+        state: verifyState(ctx.task, r.data, JSON.stringify(parsed.values)),
+        questions: Object.fromEntries(fields.map((f) => [f, ex.question(f, parsed.values[f] ?? null)])),
+      });
+      continue;
+    }
     const parsed = parseWriterOutput(ctx.task, res.text ?? '');
     if (!parsed.ok) continue; // invalid output counts as rejected without spending a decision call
     items.push({
@@ -416,7 +441,7 @@ async function verifyRound(ctx: PipelineContext, round: 1 | 2, rows: RowRecord[]
       round,
       stage: 'verify',
       state: verifyState(ctx.task, r.data, parsed.value),
-      questions: { verdict: question },
+      questions: { verdict: question! },
     });
   }
   if (!items.length) return;
@@ -432,6 +457,7 @@ export function computeOutcomes(
   st: RunState,
   ctx: Pick<PipelineContext, 'task' | 'rows' | 'thresholds' | 'maxAttempts' | 'mode'>,
 ): RowOutcome[] {
+  if (ctx.task.extract) return computeExtractOutcomes(st, ctx);
   const maxAttempts = ctx.maxAttempts ?? 2;
   return ctx.rows.map((row): RowOutcome => {
     const base = { rowId: row.id, data: row.data, costUsd: st.costByRow.get(row.id) ?? 0 };
