@@ -5,7 +5,7 @@ import { asChoice, CANNOT_TELL, type Answer, type DecisionModel } from './decide
 import { verifyKey, type RunState } from './ledger.ts';
 import type { Point } from './calibrate.ts';
 import type { RowRecord } from './pipeline.ts';
-import { parseWriterOutput, verifyQuestion, verifyState, type TaskDefinition } from './task.ts';
+import { parseExtraction, parseWriterOutput, verifyQuestion, verifyState, type TaskDefinition } from './task.ts';
 
 // Turns a labeled run into (score, p, correct) points per decision model and stage.
 // The run's own triage/verify answers come from its ledger. Other models are asked the same
@@ -22,6 +22,8 @@ export interface ScoreRecord {
   /** For verify stages: the writer answer that was judged. */
   answer?: string;
   verdict: Answer;
+  /** Extraction tasks: the answers by field (one decision call per document). `verdict` is then a placeholder. */
+  answers?: Record<string, Answer>;
   costUsd: number;
   latencyMs: number;
 }
@@ -43,6 +45,8 @@ export interface ScoreOptions {
   runModels: { triage: string; verify: string };
   models: DecisionModel[];
   budget?: Budget;
+  /** Stages to score (default: all). The bench asks other checkers about verify1 only. */
+  stages?: Stage[];
   /** Use only answers already in the ledger or cache; never call a model (reports). */
   ledgerOnly?: boolean;
   log?: (m: string) => void;
@@ -79,9 +83,18 @@ export async function scoreRun(opts: ScoreOptions): Promise<ModelPoints[]> {
   }
 
   // writer answers to verify, per round
+  const extractValues = new Map<string, Record<string, string | null>>();
   const writerAnswers: Record<'verify1' | 'verify2', Map<string, string>> = { verify1: new Map(), verify2: new Map() };
   for (const res of st.results.values()) {
     if (!res.ok) continue;
+    if (task.extract) {
+      const parsed = parseExtraction(task, res.text ?? '');
+      if (parsed.ok) {
+        writerAnswers[res.round === 1 ? 'verify1' : 'verify2'].set(res.rowId, JSON.stringify(parsed.values));
+        extractValues.set(`${res.round}|${res.rowId}`, parsed.values);
+      }
+      continue;
+    }
     const parsed = parseWriterOutput(task, res.text ?? '');
     if (parsed.ok) writerAnswers[res.round === 1 ? 'verify1' : 'verify2'].set(res.rowId, parsed.value);
   }
@@ -91,12 +104,50 @@ export async function scoreRun(opts: ScoreOptions): Promise<ModelPoints[]> {
     const model = decider.id;
     let spentUsd = 0;
     const verdicts: Record<Stage, Map<string, Answer | undefined>> = { triage: new Map(), verify1: new Map(), verify2: new Map() };
+    const fieldAnswers: Record<Stage, Map<string, Record<string, Answer>>> = { triage: new Map(), verify1: new Map(), verify2: new Map() };
     const calls: Array<() => Promise<void>> = [];
 
-    for (const stage of STAGES) {
+    for (const stage of opts.stages ?? STAGES) {
+      if (task.extract && stage === 'triage') continue;
       const rows = stage === 'triage' ? (task.triage ? records : []) : records.filter((r) => writerAnswers[stage].has(r.id));
       for (const row of rows) {
         const answer = stage === 'triage' ? undefined : writerAnswers[stage].get(row.id)!;
+        if (task.extract) {
+          const round = stage === 'verify1' ? 1 : 2;
+          const own = model === opts.runModels.verify ? st.verify.get(verifyKey(row.id, round))?.answers : undefined;
+          const cached = cache.get(`${model}|${stage}|${row.id}`);
+          const known = own ?? (cached && cached.answer === answer ? cached.answers : undefined);
+          if (known) {
+            fieldAnswers[stage].set(row.id, known);
+            continue;
+          }
+          if (opts.ledgerOnly) continue;
+          const values = extractValues.get(`${round}|${row.id}`)!;
+          const ex = task.extract;
+          calls.push(async () => {
+            opts.budget?.assertCanSpend();
+            const res = await decider.decide(
+              verifyState(task, row.data, answer!),
+              Object.fromEntries(ex.fields.map((f) => [f, ex.question(f, values[f] ?? null)])),
+            );
+            const rec: ScoreRecord = {
+              model,
+              servedAs: res.model,
+              stage,
+              rowId: row.id,
+              answer: answer!,
+              verdict: { type: 'missing' },
+              answers: res.answers,
+              costUsd: res.costUsd,
+              latencyMs: res.latencyMs,
+            };
+            appendFileSync(cachePath, JSON.stringify(rec) + '\n');
+            fieldAnswers[stage].set(row.id, res.answers);
+            spentUsd += res.costUsd;
+            opts.budget?.charge(res.costUsd);
+          });
+          continue;
+        }
         const fromLedger =
           stage === 'triage'
             ? model === opts.runModels.triage
@@ -150,6 +201,18 @@ export async function scoreRun(opts: ScoreOptions): Promise<ModelPoints[]> {
     const points: Record<Stage, Point[]> = { triage: [], verify1: [], verify2: [] };
     for (const row of records) {
       const label = row.data[labelColumn] ?? '';
+      if (task.extract) {
+        for (const stage of ['verify1', 'verify2'] as const) {
+          const answers = fieldAnswers[stage].get(row.id);
+          if (!answers) continue;
+          const values = extractValues.get(`${stage === 'verify1' ? 1 : 2}|${row.id}`)!;
+          for (const f of task.extract.fields) {
+            const value = values[f] ?? null;
+            points[stage].push(verifyPoint(answers[f], task.extract.isCorrect(f, value, label)));
+          }
+        }
+        continue;
+      }
       if (verdicts.triage.has(row.id)) points.triage.push(triagePoint(verdicts.triage.get(row.id), label));
       for (const stage of ['verify1', 'verify2'] as const) {
         if (!verdicts[stage].has(row.id)) continue;

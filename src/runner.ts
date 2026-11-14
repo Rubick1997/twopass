@@ -4,7 +4,7 @@ import { AnthropicBatchProvider } from './batch/anthropic.ts';
 import { OpenRouterBatchProvider } from './batch/openrouter.ts';
 import { RoutingBatchProvider } from './batch/router.ts';
 import { Budget } from './budget.ts';
-import { calibrateStage, type StageCalibration } from './calibrate.ts';
+import { calibrateStage, NEVER, type StageCalibration } from './calibrate.ts';
 import { OpenRouterDecisionModel } from './decide/openrouter.ts';
 import { Ledger, replay, type RunState } from './ledger.ts';
 import { acquireRunLock } from './lock.ts';
@@ -276,5 +276,7 @@ export function thresholdsFromCalibration(c: CalibrationFile, triage: string, ve
     if (!fit) throw new Error(`Calibration ${c.runId} has no ${stage} fit for ${model}. Calibrate with --models including it.`);
     return fit.threshold;
   };
-  return { t0: get(triage, 'triage'), t1: get(verify, 'verify1'), t2: get(verify, 'verify2') };
+  // An extraction task has no triage stage: its model's entry has no triage fit at all, and t0 is unused.
+  const noTriageStage = c.models[triage] !== undefined && c.models[triage]!.triage === undefined && c.models[triage]!.verify1 !== undefined;
+  return { t0: noTriageStage ? NEVER : get(triage, 'triage'), t1: get(verify, 'verify1'), t2: get(verify, 'verify2') };
 }
