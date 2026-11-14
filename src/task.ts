@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { z } from 'zod';
+import { isAnthropicDirect } from './batch/anthropic.ts';
 import { NEVER } from './calibrate.ts';
 import { assertHasCannotTell, CANNOT_TELL, type ChoiceQuestion, type DecisionState } from './decide/model.ts';
 
@@ -77,8 +78,9 @@ export function defineTask(task: TaskDefinition): TaskDefinition {
 
 export function validateTask(task: TaskDefinition): void {
   if (task.triage) assertHasCannotTell({ triage: task.triage.question });
-  if (!task.models.writer.endsWith(':batch') || !task.models.escalation.endsWith(':batch')) {
-    throw new Error(`Task "${task.name}": writer and escalation models must be ":batch" model IDs.`);
+  const batchModel = (id: string) => id.endsWith(':batch') || isAnthropicDirect(id);
+  if (!batchModel(task.models.writer) || !batchModel(task.models.escalation)) {
+    throw new Error(`Task "${task.name}": writer and escalation models must be ":batch" OpenRouter IDs or Anthropic model IDs such as "claude-haiku-5-5".`);
   }
   if (task.thresholds) validateThresholds(task.thresholds);
 }

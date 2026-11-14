@@ -64,6 +64,12 @@ const ALIAS_HELP = Object.entries(DECISION_ALIASES)
   .join(', ');
 
 async function main(argv: string[]): Promise<number> {
+  // Keys may live in a gitignored .env in the working directory; real environment variables win.
+  try {
+    process.loadEnvFile();
+  } catch {
+    // no .env (or unreadable): the environment alone is fine
+  }
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
@@ -163,11 +169,12 @@ async function main(argv: string[]): Promise<number> {
       });
       log(`run ${manifest.runId} (${manifest.mode}): ${manifest.rowCount} rows → ${dir}`);
       log(`  triage ${manifest.models.triage}, verify ${manifest.models.verify}; thresholds ${fmtThresholds(manifest.thresholds)} from ${manifest.thresholdsSource}`);
-      return execute(dir, apiKey, {});
+      return execute(dir, apiKey, { ...withAnthropicKey() });
     }
     case 'resume': {
       if (!target) throw new UsageError('resume needs <runId>');
       return execute(runDir(runsRoot, target), requireKey(), {
+        ...withAnthropicKey(),
         ...(maxUsd !== undefined ? { maxUsdOverride: maxUsd } : {}),
         allowTaskChange: values['allow-task-change'] ?? false,
       });
@@ -221,6 +228,7 @@ async function main(argv: string[]): Promise<number> {
       if (maxUsd === undefined) throw new UsageError('bench needs --max-usd. A full run costs about $10.');
       const { reportPath } = await runBench({
         apiKey: requireKey(),
+        ...withAnthropicKey(),
         runsRoot,
         dataDir: resolve(values.data ?? 'data'),
         maxUsd,
@@ -288,7 +296,7 @@ function openBrowser(url: string): void {
 async function execute(
   dir: string,
   apiKey: string,
-  o: { maxUsdOverride?: number; allowTaskChange?: boolean },
+  o: { anthropicApiKey?: string; maxUsdOverride?: number; allowTaskChange?: boolean },
 ): Promise<number> {
   const runId = dir.split('/').pop();
   process.once('SIGINT', () => {
@@ -351,6 +359,12 @@ function requireKey(): string {
   const key = process.env.OPENROUTER_API_KEY;
   if (!key) throw new UsageError('Set OPENROUTER_API_KEY first.');
   return key;
+}
+
+/** Set only when ANTHROPIC_API_KEY is: Claude writer models fail with a clear message without it. */
+function withAnthropicKey(): { anthropicApiKey?: string } {
+  const key = process.env.ANTHROPIC_API_KEY;
+  return key ? { anthropicApiKey: key } : {};
 }
 
 class UsageError extends Error {}

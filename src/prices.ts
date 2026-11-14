@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { authHeaders, requestJson, type FetchFn, type RetryOptions } from './http.ts';
 import type { TokenPrices } from './cost/price.ts';
 import type { Prices } from './pipeline.ts';
+import { anthropicPrices } from './prices-anthropic.ts';
+import { isAnthropicDirect } from './batch/anthropic.ts';
 
 const modelsSchema = z.looseObject({
   data: z.array(
@@ -45,9 +47,11 @@ export async function fetchPrices(apiKey: string, ids: string[], fetchFn: FetchF
   return pricesFrom(await fetchModelList(apiKey, fetchFn), ids);
 }
 
+/** Anthropic-direct IDs (`claude-…`) come from the pinned table, everything else from OpenRouter's list. */
 export function pricesFrom(models: OpenRouterModel[], ids: string[]): Prices {
-  const prices: Prices = {};
+  const prices: Prices = anthropicPrices(ids.filter(isAnthropicDirect));
   for (const id of ids) {
+    if (isAnthropicDirect(id)) continue;
     const m = models.find((x) => x.id === id);
     if (!m) throw new Error(`Model ${id} is not listed on OpenRouter. Batch models need the ":batch" suffix.`);
     const p = m.pricing;

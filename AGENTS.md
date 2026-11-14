@@ -18,7 +18,7 @@ CSV ──► round 0: triage    decision model picks the answer itself (closed-
         verify ──► ACCEPTED or FLAGGED (human review)
 ```
 
-All model calls go through OpenRouter, using `OPENROUTER_API_KEY`. There is no database: run state is JSONL on disk.
+Decision models and batch models go through OpenRouter, using `OPENROUTER_API_KEY`. Claude writer / escalation models can instead be called directly through Anthropic's Message Batches API (`@anthropic-ai/sdk`, `ANTHROPIC_API_KEY`) by naming them with Anthropic's own ID (`claude-haiku-5-5`, no slash, no `:batch`); `RoutingBatchProvider` picks the provider from the model ID. There is no database: run state is JSONL on disk.
 
 ## Setup
 
@@ -30,9 +30,10 @@ pnpm test            # unit tests, all HTTP mocked, no key needed
 pnpm typecheck
 pnpm build           # compiles to dist/ (the npm bin) and builds the UI into dist/ui
 export OPENROUTER_API_KEY=sk-or-...   # only for commands that call models
+export ANTHROPIC_API_KEY=sk-ant-...   # only when a task names a Claude model by its Anthropic ID
 ```
 
-Never write the key to a file in the repo. Ask the user for it, or have them export it themselves.
+Keys may live in a gitignored `.env` in the repo root (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`), never in a committed file. `cli.ts` loads it with `process.loadEnvFile()` before anything else; real environment variables win. Don't read or print `.env`. Ask the user for a key, or have them put it there themselves.
 
 ## Commands
 
@@ -130,7 +131,8 @@ src/
   ledger.ts         append-only JSONL event log + replay() → RunState
   overrides.ts      the reviewer's decisions (overrides.jsonl): read, append, validate, foldOverrides (pure)
   report.ts         summary, review summary and accuracy, enriched.csv / review.csv
-  batch/            BatchProvider interface + OpenRouter Batch API client
+  batch/            BatchProvider interface; openrouter.ts (OpenRouter Batch API), anthropic.ts (Anthropic Message Batches, direct),
+                    router.ts (routes by model ID / batch ID), wait.ts (shared poll loop)
   decide/           DecisionModel interface + OpenRouter Decisions API client
   cost/             usage.ts: raw usage → uncached / cache read / cache write / output; price.ts: price those buckets
   task.ts           task definition (prompt, schema, verify question, models, thresholds)
@@ -140,12 +142,15 @@ src/
   stats.ts          spend by stage, medians (shared by the bench report and the UI)
   lock.ts           run.lock heartbeat (advisory; tells the UI a run is alive)
   ui/               `twopass ui`: api.ts (pure), server.ts (node:http), api-types.ts, models.ts
-  datasets/         Banking77 download
+  datasets/         Banking77 download; vrdu.ts (FARA registration forms: download, documents.jsonl), vrdu-split.ts (seeded, stratified)
+  extract/          VRDU field normalisation (dates, digits, text) and slot scoring (pure)
+  prices-anthropic.ts  pinned batch prices + context length for Anthropic-direct models
 tasks/              task files (banking77.task.ts)
 ui/                 the browser app (Vite + React, own tsconfig), built to dist/ui
   ui/src/explore.ts        threshold replay + live refit, waffle counts and plain names for the results explorer (pure)
   ui/src/pages/Explore.tsx results explorer page: three tabs, inline SVG charts, no chart library
-scripts/            dataset fetch, contamination check, fake-live-run.ts (UI demo, no cost)
+bench/vrdu/         splits.json (committed dev / calibration / test document IDs)
+scripts/            dataset fetch (fetch:banking77, fetch:vrdu, split:vrdu), contamination check, fake-live-run.ts (UI demo, no cost)
 test/               vitest, HTTP mocked through test/helpers.ts
 docs-public/        images for the README (docs/ is local-only and gitignored)
 runs/  data/        local only, gitignored
@@ -190,13 +195,18 @@ runs/  data/        local only, gitignored
 | OpenRouter `prompt_tokens` **includes** cache reads (`cached_tokens`) and writes (`cache_write_tokens`); `prompt × input price` is then wrong (48% low on a cache write, 6.4× high on a hit) | `src/cost/` |
 | Batch result rows carry tokens but **no cost**; only the batch has `usage.cost` (`GET /generation?id=` gives per-row cost) | per-row cost is computed, `report` checks it against the billed total |
 | Anthropic caches only prefixes of 512+ tokens and silently skips shorter ones; the usage doesn't say which TTL was written | task `writer.cacheSystem` |
+| Anthropic direct: the `custom_id` rule above still applies; results come out of order | `collectBatch` (same path) |
+| Anthropic direct: batches report **no batch-level cost** (`costUsd: null`); the budget charges the computed per-row sum, priced from pinned batch prices (50% of list) | `src/prices-anthropic.ts`, `collectBatch` |
+| Anthropic's `input_tokens` **excludes** cache reads and writes (OpenRouter's `prompt_tokens` includes them) | `bucketsFromAnthropic`, `BatchResultLine.buckets` |
+| Anthropic batch status `ended` is reported as `completed` (the UI and reports look for it); `terminal` only when ended | `AnthropicBatchProvider.poll` |
+| Anthropic direct gets no prompt-cache markers, no `temperature`/`top_p`/`top_k`/`stream`; the OpenRouter-shaped body is translated and an unknown key throws | `toMessagesParams` |
 
 ## Adding a task
 
 Copy `tasks/banking77.task.ts`. Define `state`, the `writer` prompt with `{{column}}` placeholders, `outputSchema`
 (zod), the `verify` instructions, and the models. List columns that only `state` or `verify.state` read in
 `inputColumns`, so `check` can require them. Add `triage` only for closed-choice tasks. Writer and escalation
-model IDs must end in `:batch`.
+model IDs must end in `:batch` (OpenRouter) or be an Anthropic ID like `claude-haiku-5-5`.
 
 ## Prompt caching
 
@@ -231,4 +241,4 @@ model IDs must end in `:batch`.
 
 ## Before committing
 
-`pnpm test && pnpm typecheck && pnpm build` (`typecheck` covers both `src` and the `ui/` app). Don't commit `runs/`, `data/`, `dist/`, `.env`, or anything containing an API key.
+`pnpm test && pnpm typecheck && pnpm build` (`typecheck` covers both `src` and the `ui/` app). Don't commit `runs/`, `data/` (the VRDU download lives in `data/vrdu/`), `dist/`, `.env`, or anything containing an API key.

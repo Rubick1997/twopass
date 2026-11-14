@@ -300,10 +300,11 @@ export function estimateCost(
  * provider bills is what the budget charges either way.
  */
 export function computedRowCost(
-  line: Pick<BatchResultLine, 'inputTokens' | 'outputTokens' | 'usage'>,
+  line: Pick<BatchResultLine, 'inputTokens' | 'outputTokens' | 'usage' | 'buckets'>,
   price: ModelPrice,
   cacheTtl: CacheTtl,
 ): number {
+  if (line.buckets) return priceUsage(line.buckets, price, cacheTtl);
   if (line.usage) {
     try {
       return priceUsage(bucketsFromOpenRouter(line.usage), price, cacheTtl);

@@ -1,6 +1,8 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { AnthropicBatchProvider } from './batch/anthropic.ts';
 import { OpenRouterBatchProvider } from './batch/openrouter.ts';
+import { RoutingBatchProvider } from './batch/router.ts';
 import { Budget } from './budget.ts';
 import { calibrateStage, type StageCalibration } from './calibrate.ts';
 import { OpenRouterDecisionModel } from './decide/openrouter.ts';
@@ -129,6 +131,8 @@ export class TaskChangedError extends Error {}
 
 export interface ExecuteOptions {
   apiKey: string;
+  /** Key for Claude models called directly (writer / escalation IDs like `claude-haiku-5-5`). */
+  anthropicApiKey?: string;
   /** Shared budget (bench). Otherwise one is made from the manifest's cap. */
   budget?: Budget;
   maxUsdOverride?: number;
@@ -184,7 +188,10 @@ async function executeLocked(
     budget,
     triageDecider,
     verifyDecider: manifest.models.verify === manifest.models.triage ? triageDecider : decider(manifest.models.verify),
-    batch: new OpenRouterBatchProvider({ apiKey: o.apiKey }),
+    batch: new RoutingBatchProvider(
+      new OpenRouterBatchProvider({ apiKey: o.apiKey }),
+      o.anthropicApiKey ? new AnthropicBatchProvider({ apiKey: o.anthropicApiKey }) : undefined,
+    ),
     writerModel: manifest.models.writer,
     escalationModel: manifest.models.escalation,
     thresholds: manifest.thresholds,

@@ -5,6 +5,8 @@ import { parse } from 'csv-parse/sync';
 import { stringify } from 'csv-stringify/sync';
 import type { z } from 'zod';
 import type { FetchFn } from './http.ts';
+import { isAnthropicDirect } from './batch/anthropic.ts';
+import { ANTHROPIC_BATCH_PRICES, ANTHROPIC_CONTEXT_LENGTH } from './prices-anthropic.ts';
 import { fetchModelList, type OpenRouterModel } from './prices.ts';
 import { isFormulaLike } from './report.ts';
 import { parseOutput, render, verifyQuestion, verifyState, type Row, type TaskDefinition } from './task.ts';
@@ -641,6 +643,9 @@ function mod97(iban: string): number {
 
 // ------------------------------------------------------------------- context length
 
+/** Anthropic-direct models are not on OpenRouter's list; the pinned table has their context length. */
+const ANTHROPIC_CONTEXT_LENGTH_FOR = (model: string): number | undefined => (model in ANTHROPIC_BATCH_PRICES ? ANTHROPIC_CONTEXT_LENGTH : undefined);
+
 async function checkContext(
   task: TaskDefinition,
   columns: string[],
@@ -678,7 +683,7 @@ async function checkContext(
   const unknown = new Set<string>();
   for (const [role, model] of Object.entries(models)) {
     if (!model) continue;
-    const limit = list.find((m) => m.id === model)?.context_length;
+    const limit = isAnthropicDirect(model) ? ANTHROPIC_CONTEXT_LENGTH_FOR(model) : list.find((m) => m.id === model)?.context_length;
     if (!limit) {
       unknown.add(model);
       continue;
@@ -707,7 +712,7 @@ async function checkContext(
   if (unknown.size) {
     info.push({
       code: 'context_length_unknown',
-      message: `context length not listed on OpenRouter for ${[...unknown].join(', ')}; not checked`,
+      message: `context length not listed (OpenRouter's model list or the pinned Anthropic table) for ${[...unknown].join(', ')}; not checked`,
     });
   }
 }

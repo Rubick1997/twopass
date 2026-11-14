@@ -52,6 +52,7 @@ export function parseConfigs(spec: string): BenchConfig[] {
 
 export interface BenchOptions {
   apiKey: string;
+  anthropicApiKey?: string;
   runsRoot: string;
   dataDir: string;
   maxUsd: number;
@@ -162,7 +163,7 @@ export async function runBench(o: BenchOptions): Promise<{ benchDir: string; rep
   if (!state.calibrationPath) {
     const calibDir = resolve(o.runsRoot, state.calibrationRunId!);
     o.log(`calibration: collecting on ${state.calibrationSize} train rows (${state.calibrationRunId})`);
-    await executeRun(calibDir, { apiKey: o.apiKey, budget, log: prefix(o.log, 'calib') });
+    await executeRun(calibDir, { apiKey: o.apiKey, ...(o.anthropicApiKey ? { anthropicApiKey: o.anthropicApiKey } : {}), budget, log: prefix(o.log, 'calib') });
     const { path } = await calibrateRun(calibDir, {
       apiKey: o.apiKey,
       models: decisionModels,
@@ -210,6 +211,7 @@ export async function runBench(o: BenchOptions): Promise<{ benchDir: string; rep
   const exec = (c: (typeof all)[number]) =>
     executeRun(resolve(o.runsRoot, state.testRuns[c.name]!), {
       apiKey: o.apiKey,
+      ...(o.anthropicApiKey ? { anthropicApiKey: o.anthropicApiKey } : {}),
       budget,
       ...(o.maxRowsPerBatch ? { maxRowsPerBatch: o.maxRowsPerBatch } : {}),
       log: prefix(o.log, c.name),
