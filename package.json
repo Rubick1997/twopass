@@ -37,10 +37,13 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p ui/tsconfig.json",
     "test": "vitest run",
     "fetch:banking77": "node scripts/fetch-banking77.ts",
+    "fetch:vrdu": "node scripts/fetch-vrdu.ts",
+    "split:vrdu": "node scripts/split-vrdu.ts",
     "fake-live-run": "node scripts/fake-live-run.ts",
     "article-figures": "node scripts/article-figures.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.8.0",
     "csv-parse": "^7.0.3",
     "csv-stringify": "^6.9.0",
     "zod": "^4.6.7"
