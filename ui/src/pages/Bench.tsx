@@ -30,7 +30,7 @@ export function BenchPage({ id }: { id: string }) {
       </div>
       <ErrorNote error={bench.error} />
       <SpendVsCap spent={b.spentUsd} cap={b.maxUsd} scope="run" />
-      {b.hasReport && (
+      {b.hasReport && b.kind !== 'extract' && (
         <p className="explore-cta">
           <a href={exploreHref(b.benchId)} className="button button-primary">
             Explore results

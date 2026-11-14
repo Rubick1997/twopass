@@ -47,6 +47,7 @@ Run from the repo root with `node src/cli.ts <command>` (or `pnpm twopass <comma
 | `report <runId> [--write]` | Summary from the ledger plus the reviewer's `overrides.jsonl`: review progress and, with labels, accuracy without and with a human. `--write` rewrites `enriched.csv` and `review.csv` from them | no |
 | `calibrate <runId> --models jev,clef,luna` | Fit thresholds on a labeled `--collect` run | yes |
 | `bench banking77 --max-usd N [--calibration file]` | Full benchmark: downloads data, calibrates on train, runs configs on test. `--calibration` reuses an existing `calibration.json` (path recorded in `bench.json` with `calibrationReused: true`, no calibration run, its spend not counted) | yes (~$20–30 full) |
+| `bench vrdu --split dev\|test --max-usd N [--decision clef] [--also jev,luna] [--baseline claude-opus-5-5] [--target 0.95] [--id benchId]` | Extraction benchmark on FARA registration forms (6 fields per document). Writes `data/vrdu/<name>.csv`, calibrates on the calibration split (`--split dev`: 15 + 15 dev documents, **for debugging only**), runs the full pipeline and a frontier baseline on the test split, scores each `--also` checker on the round-1 values, and writes `bench-report.md` / `.json` plus `enriched-fields.csv` in both test run dirs. Needs `OPENROUTER_API_KEY` **and** `ANTHROPIC_API_KEY`. State in `runs/<benchId>/bench.json` with `kind: 'extract'`; resume with `--id` | yes |
 | `ui [--runs dir] [--port 4777] [--no-open]` | Local web app (127.0.0.1 only) with every run and bench, live, and the review queue for flagged rows. Needs `pnpm build` first | no (only GET `/credits` for the balance, if a key is set) |
 
 **Runs normalize their input.** `run` and `bench` call `checkCsv` (`src/check.ts`) first and refuse to start on any
@@ -138,14 +139,16 @@ src/
   task.ts           task definition (prompt, schema, verify question, models, thresholds)
   calibrate.ts      threshold fitting, isotonic calibration, ECE/Brier/AUC (pure)
   score.ts          ledger → (score, p, correct) points per model and stage
-  bench.ts          benchmark orchestration + report
+  bench.ts          benchmark orchestration + report (Banking77)
+  bench-vrdu.ts     `bench vrdu`: calibrate, test + baseline, --also checkers, report (reuses startRun / executeRun / calibrateRun / scoreRun)
   stats.ts          spend by stage, medians (shared by the bench report and the UI)
   lock.ts           run.lock heartbeat (advisory; tells the UI a run is alive)
   ui/               `twopass ui`: api.ts (pure), server.ts (node:http), api-types.ts, models.ts
   datasets/         Banking77 download; vrdu.ts (FARA registration forms: download, documents.jsonl), vrdu-split.ts (seeded, stratified)
-  extract/          VRDU field normalisation (dates, digits, text) and slot scoring (pure)
+  extract/          VRDU field normalisation (dates, digits, text) and slot scoring (pure); outcomes.ts (computeFieldOutcomes: per-field
+                    status from the ledger, pure, replayable under any thresholds); report.ts (bench vrdu metrics, markdown, enriched-fields rows; pure)
   prices-anthropic.ts  pinned batch prices + context length for Anthropic-direct models
-tasks/              task files (banking77.task.ts)
+tasks/              task files (banking77.task.ts, vrdu.task.ts)
 ui/                 the browser app (Vite + React, own tsconfig), built to dist/ui
   ui/src/explore.ts        threshold replay + live refit, waffle counts and plain names for the results explorer (pure)
   ui/src/pages/Explore.tsx results explorer page: three tabs, inline SVG charts, no chart library
@@ -207,6 +210,21 @@ Copy `tasks/banking77.task.ts`. Define `state`, the `writer` prompt with `{{colu
 (zod), the `verify` instructions, and the models. List columns that only `state` or `verify.state` read in
 `inputColumns`, so `check` can require them. Add `triage` only for closed-choice tasks. Writer and escalation
 model IDs must end in `:batch` (OpenRouter) or be an Anthropic ID like `claude-haiku-5-5`.
+
+**Extract tasks** (one document per row, several fields per document; see `tasks/vrdu.task.ts`) add an `extract` block:
+`fields`, `question(field, value | null)` (the checker's question about one proposed value, or "the document has no such
+field"; both variants need `cannot_tell`) and `isCorrect(field, value, label)`. Rules: no `triage`; the writer replies with
+one JSON object holding exactly those keys, each a string or `null` (`parseExtraction`; blank counts as null); the decision
+model is called **once per document with one question per field** and the ledger `decision` event's `answers` is keyed by
+field; acceptance is **per field** (`t1` / `t2` stay global per round); the retry is **per document** (round 2 re-extracts the
+whole document with the escalation model, asks only the fields round 1 did not accept, and only those fields take the new
+value; `collect` mode asks every field in both rounds). `computeFieldOutcomes` (`src/extract/outcomes.ts`) is the per-field
+`computeOutcomes`, pure and replayable under any thresholds (`maxRound: 1` is the "simple" writer-checker-person pipeline);
+`computeOutcomes` derives the document-level row from it (answer = JSON of the merged values). `scoreRun` gives one
+calibration point per field slot. The `label` column holds whatever `isCorrect` expects (VRDU: the gold map as JSON);
+`check` validates it as a map of field to list of strings, not against the output schema. A document counts as correct in
+reports when every field is; `acceptedAtRound` in `pipeline.ts` is the one "accepted at round N" test for both task kinds.
+Overrides and the review queue are not built for extract runs yet.
 
 ## Prompt caching
 

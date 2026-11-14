@@ -7,7 +7,7 @@ import { asChoice, CANNOT_TELL } from '../decide/model.ts';
 import type { FetchFn } from '../http.ts';
 import { customId, parseLedger, replay, verifyKey, type LedgerEvent, type RunState } from '../ledger.ts';
 import { isLockLive, isPidAlive, readRunLock } from '../lock.ts';
-import { computeOutcomes, writerSettings, type RowOutcome, type RowRecord } from '../pipeline.ts';
+import { acceptedAtRound, computeOutcomes, writerSettings, type RowOutcome, type RowRecord } from '../pipeline.ts';
 import {
   allowedAnswers,
   appendOverride,
@@ -30,7 +30,7 @@ import type { ScoreRecord } from '../score.ts';
 import { loadRun, type RunManifest } from '../run.ts';
 import { batchDurationMs, median, spendByStage, type StageSpend } from '../stats.ts';
 import { bucketsFromOpenRouter } from '../cost/usage.ts';
-import { loadTask, parseWriterOutput, render, type TaskDefinition } from '../task.ts';
+import { loadTask, parseExtraction, parseWriterOutput, render, type TaskDefinition } from '../task.ts';
 import { triageOutcome, verifyOutcome } from '../verdict.ts';
 import type {
   ActivityItem,
@@ -241,12 +241,14 @@ function shellQuote(s: string): string {
   return /^[A-Za-z0-9_./:=@-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
+const benchCommandName = (b: Pick<BenchState, 'kind'>): string => (b.kind === 'extract' ? 'vrdu' : 'banking77');
+
 function resumeCommand(runsRoot: string, runId: string, bench: { ref: BenchRef; bench: BenchState } | undefined, o: ApiOptions): string {
   const cwd = o.cwd ?? process.cwd();
   const runs = resolve(runsRoot) === resolve(cwd, 'runs') ? '' : ` --runs ${shellQuote(resolve(runsRoot))}`;
   if (bench) {
     const cap = bench.bench.maxUsd !== undefined ? String(bench.bench.maxUsd) : '<usd>';
-    return `twopass bench banking77 --id ${bench.ref.benchId} --max-usd ${cap}${runs}`;
+    return `twopass bench ${benchCommandName(bench.bench)} --id ${bench.ref.benchId} --max-usd ${cap}${runs}`;
   }
   return `twopass resume ${runId}${runs}`;
 }
@@ -361,7 +363,7 @@ export function stageProgress(st: RunState, task: TaskDefinition, m: Pick<RunMan
   };
   const parsedOk = (id: string, round: 1 | 2) => {
     const res = st.results.get(customId(id, round));
-    return !!res?.ok && parseWriterOutput(task, res.text ?? '').ok;
+    return !!res?.ok && (task.extract ? parseExtraction(task, res.text ?? '') : parseWriterOutput(task, res.text ?? '')).ok;
   };
   const writeStage = (round: 1 | 2, ids: string[], estimate: boolean): Omit<StageProgress, 'state'> => ({
     key: round === 1 ? 'write1' : 'write2',
@@ -409,9 +411,7 @@ export function stageProgress(st: RunState, task: TaskDefinition, m: Pick<RunMan
     : round1.filter((id) => {
         if (!writeSettled(id, 1)) return true; // undecided: may still need round 2
         if (!parsedOk(id, 1)) return true; // failed or invalid answer
-        const v = st.verify.get(verifyKey(id, 1));
-        if (!v) return true;
-        return !verifyOutcome(asChoice(v.answers.verdict), m.thresholds.t1).accepted;
+        return !acceptedAtRound(task, st, id, 1, m.thresholds.t1);
       });
   const estimate2 = v1.totalIsEstimate || v1.done < v1.total;
   stages.push(writeStage(2, round2, estimate2));
@@ -649,7 +649,7 @@ async function benchItem(runsRoot: string, benchId: string, o: ApiOptions, index
   const spent =
     runs.reduce((n, c) => n + c.run!.spentUsd, 0) + (bench.calibrationRunId ? scoresCostUsd(resolveInside(runsRoot, bench.calibrationRunId)) : 0);
   const hasReport = existsSync(join(dir, 'bench-report.md'));
-  const expected = bench.configs.length + 1; // configs + baseline
+  const expected = bench.kind === 'extract' ? 2 : (bench.configs ?? []).length + 1; // configs + baseline (extract: normal + baseline)
   let status: RunStatus;
   if (runs.some((c) => c.run!.status === 'running')) status = 'running';
   else if (hasReport && configs.length >= expected && runs.every((c) => c.run!.status === 'finished')) status = 'finished';
@@ -657,6 +657,7 @@ async function benchItem(runsRoot: string, benchId: string, o: ApiOptions, index
 
   return {
     benchId: bench.benchId ?? benchId,
+    kind: bench.kind === 'extract' ? 'extract' : 'classify',
     createdAt: bench.createdAt,
     status,
     maxUsd: bench.maxUsd ?? null,
@@ -692,7 +693,7 @@ export async function getBench(runsRoot: string, benchId: string, o: ApiOptions 
     ...item,
     state: state as unknown as Record<string, unknown>,
     resumeCommand:
-      item.status === 'stopped' ? `twopass bench banking77 --id ${benchId} --max-usd ${state.maxUsd ?? '<usd>'}${runs}` : null,
+      item.status === 'stopped' ? `twopass bench ${benchCommandName(state)} --id ${benchId} --max-usd ${state.maxUsd ?? '<usd>'}${runs}` : null,
   };
 }
 
@@ -905,6 +906,9 @@ export async function getBenchExplore(runsRoot: string, benchId: string): Promis
   if (!existsSync(join(dir, 'bench.json'))) throw new NotFoundError(`No bench ${benchId}`);
   if (!existsSync(reportPath)) throw new NotFoundError(`Bench ${benchId} has no bench-report.json yet`);
   const state = readBench(dir);
+  if (state.kind === 'extract') {
+    throw new NotFoundError(`Bench ${benchId} is an extraction bench: the results explorer is not built for it yet. Read bench-report.md instead.`);
+  }
 
   // The calibration run: its own id, or (reused calibration) the run named inside calibration.json.
   let calibRunId = state.calibrationRunId;
@@ -1275,6 +1279,7 @@ async function reviewableRun(runsRoot: string, runId: string): Promise<{ run: Lo
   const run = await loadRunCached(dir);
   const review = reviewOf(run);
   if (!run.task || !review) throw new BadRequestError(`This run cannot be reviewed: ${run.problem ?? 'its outcomes are unknown'}`);
+  if (run.task.extract) throw new BadRequestError('Review is not available for extraction runs yet (flagged fields are in enriched-fields.csv).');
   return { run: run as LoadedRun & { task: TaskDefinition }, review };
 }
 

@@ -75,6 +75,8 @@ export interface BenchOptions {
 }
 
 export interface BenchState {
+  /** Absent in classification benches; `bench vrdu` writes `extract` (see bench-vrdu.ts). */
+  kind?: 'extract';
   benchId: string;
   createdAt: string;
   taskPath: string;

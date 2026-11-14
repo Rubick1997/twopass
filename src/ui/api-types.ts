@@ -166,6 +166,8 @@ export interface BenchConfigSummary {
 
 export interface BenchListItem {
   benchId: string;
+  /** `extract` for `bench vrdu`: no configs, no results explorer; the report is `bench-report.md`. */
+  kind: 'classify' | 'extract';
   createdAt: string;
   status: RunStatus;
   maxUsd: number | null;

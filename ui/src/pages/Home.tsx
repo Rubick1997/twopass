@@ -52,7 +52,7 @@ export function Home() {
                 </h3>
                 <StatusBadge status={b.status} />
                 <span className="muted small">started {formatDateTime(b.createdAt)}</span>
-                {b.hasReport && (
+                {b.hasReport && b.kind !== 'extract' && (
                   <a href={exploreHref(b.benchId)} className="small">
                     Explore results
                   </a>
