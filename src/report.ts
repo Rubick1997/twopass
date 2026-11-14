@@ -170,7 +170,7 @@ export function costCheckLine(c: CostCheck): string {
   return `cost check: per-row cost $${c.computedUsd.toFixed(4)} vs billed $${c.billedUsd.toFixed(4)} over ${c.batches} batch(es) (${err})`;
 }
 
-function roundTimings(st: RunState): RoundTiming[] {
+export function roundTimings(st: RunState): RoundTiming[] {
   return ([1, 2] as const).flatMap((round) => {
     const mins = [...st.batches.values()]
       .filter((b) => b.round === round && b.finishedAt)
