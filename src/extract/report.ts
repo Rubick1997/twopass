@@ -98,6 +98,17 @@ export interface CalibrationFacts {
   models: Record<string, { verify1?: { slots: number; wrong: number }; verify2?: { slots: number; wrong: number } }>;
 }
 
+/** What `check` did to the document text on its way into the runs (see bench-vrdu.ts). */
+export interface TextCheck {
+  documents: number;
+  /** Documents whose stored text differs from the dataset's. */
+  changed: number;
+  /** Documents changed inside the text (line endings, Unicode form, control or zero-width characters), not only trimmed at the ends. */
+  changedInside: number;
+  /** Documents per kind of change. */
+  kinds: Record<string, number>;
+}
+
 export interface ExtractReportInput {
   benchId: string;
   createdAt: string;
@@ -114,6 +125,7 @@ export interface ExtractReportInput {
   calibration: CalibrationFacts;
   target: number;
   maxAttempts?: number;
+  textCheck?: TextCheck;
 }
 
 export interface ExtractReport {
@@ -140,6 +152,7 @@ export interface ExtractReport {
   perField: Record<'full' | 'simple', Record<string, SlotMetrics>>;
   checkers: CheckerResult[];
   calibration: CalibrationFacts;
+  textCheck: TextCheck | null;
   minutes: { normal: { rounds: RoundTiming[]; total: number }; baseline: { rounds: RoundTiming[]; total: number } };
 }
 
@@ -275,6 +288,7 @@ export function buildExtractReport(i: ExtractReportInput): ExtractReport {
     perField: { full: perField(fullSlots), simple: perField(simpleSlots) },
     checkers: i.checkers.map((c) => checkerResult(c, i)),
     calibration: i.calibration,
+    textCheck: i.textCheck ?? null,
     minutes: {
       normal: { rounds: roundTimings(i.normal), total: minutes(i.normal) },
       baseline: { rounds: roundTimings(i.baseline), total: minutes(i.baseline) },
@@ -435,6 +449,16 @@ export function renderExtractReport(r: ExtractReport): string {
       const s = stages[stage];
       if (s) L.push(`| ${model} | ${stage} | ${n0(s.slots)} | ${n0(s.wrong)} |`);
     }
+  }
+
+  if (r.textCheck) {
+    const t = r.textCheck;
+    L.push('', '## Document text', '');
+    L.push(
+      `\`check\` changed the text of ${n0(t.changed)} of ${n0(t.documents)} documents on its way into the runs ` +
+        `(${n0(t.changedInside)} inside the text, not only at the ends)` +
+        (Object.keys(t.kinds).length ? `: ${Object.entries(t.kinds).map(([k, v]) => `${k} ${n0(v)}`).join(', ')}.` : '.'),
+    );
   }
 
   L.push('', '## Wall-clock', '');

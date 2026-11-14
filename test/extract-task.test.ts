@@ -1,8 +1,13 @@
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { stringify } from 'csv-stringify/sync';
 import { describe, expect, it } from 'vitest';
+import { checkCsv } from '../src/check.ts';
 import { VRDU_FIELDS } from '../src/datasets/vrdu.ts';
 import { parseExtraction, validateTask, type TaskDefinition } from '../src/task.ts';
 import vrdu from '../tasks/vrdu.task.ts';
 import { toyTask } from './extract-helpers.ts';
+import { tempDir } from './helpers.ts';
 
 describe('validateTask for extract tasks', () => {
   it('forbids triage', () => {
@@ -90,5 +95,25 @@ describe('the VRDU task', () => {
     it('treats a field missing from the gold map as absent', () => {
       expect(ex.isCorrect('signer_title', null, '{}')).toBe(true);
     });
+  });
+});
+
+describe('check on an extract task', () => {
+  const csv = (gold: string) => {
+    const dir = tempDir();
+    const path = join(dir, 'in.csv');
+    writeFileSync(path, stringify([['doc_id', 'text', 'gold'], ['d1', 'some document', gold]]));
+    return path;
+  };
+  it('accepts a gold cell (field -> list of strings) as the label, without enum or rare-label checks', async () => {
+    const r = await checkCsv(csv('{"a":["x"],"b":[],"c":[]}'), toyTask, { labelColumn: 'gold', loadModels: async () => [] });
+    expect(r.report.errors).toEqual([]);
+    expect(r.report.warnings.map((w) => w.code)).not.toContain('rare_labels');
+  });
+  it('rejects a label that is not a gold map', async () => {
+    const r = await checkCsv(csv('Amendment'), toyTask, { labelColumn: 'gold', loadModels: async () => [] });
+    expect(r.report.errors.map((e) => e.code)).toContain('invalid_labels');
+    const wrongKey = await checkCsv(csv('{"zzz":["x"]}'), toyTask, { labelColumn: 'gold', loadModels: async () => [] });
+    expect(wrongKey.report.errors.map((e) => e.code)).toContain('invalid_labels');
   });
 });

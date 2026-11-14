@@ -54,6 +54,13 @@ const USAGE = `twopass: batch LLM work, checked row by row by a decision model
       --max-batch-rows sends batches one at a time, so OpenRouter's worst-case
       reservation (every row at max_tokens) stays within your credit balance.
 
+  twopass bench vrdu --split dev|test --max-usd <n> [--decision clef] [--also jev,luna]
+      [--baseline claude-opus-5-5] [--target 0.95] [--id <benchId>] [--max-batch-rows <n>]
+      extraction benchmark on FARA registration forms (6 fields per document): calibrates on the
+      calibration split (--split dev: 15 + 15 dev documents, for debugging only), tests the full
+      pipeline against a frontier baseline, and writes bench-report.md. Needs both
+      OPENROUTER_API_KEY and ANTHROPIC_API_KEY.
+
   twopass ui [--runs <dir>] [--port 4777] [--no-open]     no model calls, no cost
       a local web app (127.0.0.1 only) showing every run and bench with live progress;
       with OPENROUTER_API_KEY set it also shows your OpenRouter balance
@@ -99,6 +106,8 @@ async function main(argv: string[]): Promise<number> {
       'test-size': { type: 'string' },
       'baseline-size': { type: 'string' },
       'max-batch-rows': { type: 'string' },
+      split: { type: 'string' },
+      also: { type: 'string' },
       id: { type: 'string' },
       data: { type: 'string' },
       delimiter: { type: 'string' },
@@ -225,7 +234,32 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     case 'bench': {
-      if (target !== 'banking77') throw new UsageError('bench supports one dataset: banking77');
+      if (target === 'vrdu') {
+        if (maxUsd === undefined) throw new UsageError('bench vrdu needs --max-usd.');
+        const split = values.split ?? 'test';
+        if (split !== 'dev' && split !== 'test') throw new UsageError('--split must be dev or test');
+        const missing = [['OPENROUTER_API_KEY', process.env.OPENROUTER_API_KEY], ['ANTHROPIC_API_KEY', process.env.ANTHROPIC_API_KEY]].filter(([, v]) => !v).map(([k]) => k);
+        if (missing.length) throw new UsageError(`bench vrdu needs ${missing.join(' and ')} set (OpenRouter runs the checkers, Anthropic runs the writers).`);
+        const { runVrduBench, parseAlso } = await import('./bench-vrdu.ts');
+        const { reportPath } = await runVrduBench({
+          apiKey: process.env.OPENROUTER_API_KEY!,
+          anthropicApiKey: process.env.ANTHROPIC_API_KEY!,
+          runsRoot,
+          dataDir: resolve(values.data ?? 'data'),
+          maxUsd,
+          split,
+          decision: alias(values.decision ?? 'clef')!,
+          also: parseAlso(values.also),
+          baseline: values.baseline ?? 'claude-opus-5-5',
+          target: values.target ? toNumber(values.target, 'target') : 0.95,
+          ...(values['max-batch-rows'] ? { maxRowsPerBatch: toInt(values['max-batch-rows'], 'max-batch-rows') } : {}),
+          ...(values.id ? { id: values.id } : {}),
+          log,
+        });
+        log(`\nreport: ${reportPath}`);
+        return 0;
+      }
+      if (target !== 'banking77') throw new UsageError('bench supports two datasets: banking77, vrdu');
       if (maxUsd === undefined) throw new UsageError('bench needs --max-usd. A full run costs about $10.');
       const { reportPath } = await runBench({
         apiKey: requireKey(),

@@ -259,7 +259,7 @@ function taskPath(): string {
   return found;
 }
 
-function prefix(log: (m: string) => void, name: string) {
+export function prefix(log: (m: string) => void, name: string) {
   return (m: string) => log(`[${name}] ${m}`);
 }
 
@@ -268,7 +268,8 @@ function hasSpent(dir: string): boolean {
   return existsSync(path) && readFileSync(path, 'utf8').trim().length > 0;
 }
 
-function spentSoFar(runsRoot: string, state: BenchState): number {
+/** Spend recorded in the calibration and test runs' ledgers and score caches (shared with `bench vrdu`). */
+export function spentSoFar(runsRoot: string, state: Pick<BenchState, 'calibrationRunId' | 'testRuns'>): number {
   const ids = [state.calibrationRunId, ...Object.values(state.testRuns)].filter((x): x is string => !!x);
   let total = 0;
   for (const id of ids) {
