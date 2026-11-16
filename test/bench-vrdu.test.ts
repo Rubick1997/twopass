@@ -1,7 +1,7 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { compareDocumentText, DEV_CALIBRATION_DOCS, pickSplit, runVrduBench } from '../src/bench-vrdu.ts';
+import { compareDocumentText, DEV_CALIBRATION_DOCS, pickSplit, refitVrduBench, runVrduBench } from '../src/bench-vrdu.ts';
 import type { VrduDocument } from '../src/datasets/vrdu.ts';
 import { docs, installFakeApi, setup } from './vrdu-bench-helpers.ts';
 
@@ -106,5 +106,114 @@ describe('bench vrdu --split dev, end to end on mocks', () => {
     installFakeApi();
     const { options } = setup();
     await expect(runVrduBench(options({ id: 'bench-nope' }))).rejects.toThrow(/No bench found/);
+  });
+});
+
+describe('round-2 threshold: conditional fit, fallback and --refit', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const readJson = (path: string) => JSON.parse(readFileSync(path, 'utf8'));
+
+  it('new benches use verify2Conditional for t2 and say so', async () => {
+    installFakeApi();
+    const { root, options } = setup();
+    const { benchDir } = await runVrduBench(options({ id: undefined }));
+    const state = readJson(join(benchDir, 'bench.json'));
+    const cal = readJson(state.calibrationPath);
+    const m = readJson(join(root, 'runs', state.testRuns.normal, 'manifest.json'));
+    expect(cal.models['dec/main'].verify2Conditional.n).toBeLessThan(cal.models['dec/main'].verify2.n);
+    expect(cal.models['dec/main'].operatingPoints['0.98']).toBeDefined();
+    expect(m.thresholds.t2).toBe(cal.models['dec/main'].verify2Conditional.fit.threshold);
+    expect(m.thresholdsSource).toContain('t2 on the slots round 1 did not accept');
+  });
+
+  it('falls back to the verify2 fit for an old calibration file', async () => {
+    installFakeApi();
+    const { root, options } = setup();
+    const { benchDir } = await runVrduBench(options({ id: undefined }));
+    const benchId = benchDir.split('/').pop()!;
+    // Back to the point after calibration, with a calibration file made before the conditional fit existed.
+    const statePath = join(benchDir, 'bench.json');
+    const state = readJson(statePath);
+    state.testRuns = {};
+    writeFileSync(statePath, JSON.stringify(state));
+    const cal = readJson(state.calibrationPath);
+    for (const e of Object.values(cal.models) as Array<Record<string, unknown>>) {
+      delete e.verify2Conditional;
+      delete e.operatingPoints;
+    }
+    writeFileSync(state.calibrationPath, JSON.stringify(cal));
+    await runVrduBench(options({ id: benchId, maxUsd: 5 }));
+    const after = readJson(join(root, 'runs', benchId, 'bench.json'));
+    const m = readJson(join(root, 'runs', after.testRuns.normal, 'manifest.json'));
+    expect(m.thresholds.t2).toBe(cal.models['dec/main'].verify2.fit.threshold);
+    expect(m.thresholdsSource).toContain('t2 on all slots');
+    const md = readFileSync(join(root, 'runs', benchId, 'bench-report.md'), 'utf8');
+    expect(md).not.toContain('## 98% operating point'); // an old calibration has none
+  });
+
+  it('--refit makes no HTTP call, keeps .first copies once, records refit, leaves the runs alone, and the report shows both reads', async () => {
+    installFakeApi();
+    const { root, options } = setup();
+    const { benchDir } = await runVrduBench(options({ id: undefined }));
+    const state0 = readJson(join(benchDir, 'bench.json'));
+    const normalDir = join(root, 'runs', state0.testRuns.normal);
+    const baselineDir = join(root, 'runs', state0.testRuns.baseline);
+    // Pretend the test split was first read with a t2 fitted on all slots: a different t2 in the normal manifest.
+    const manifestPath = join(normalDir, 'manifest.json');
+    const manifest = readJson(manifestPath);
+    manifest.thresholds.t2 = 0.5;
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+    const bytes = () => [manifestPath, join(normalDir, 'ledger.jsonl'), join(baselineDir, 'manifest.json'), join(baselineDir, 'ledger.jsonl')].map((p) => readFileSync(p, 'utf8'));
+    const runFiles = bytes();
+    const firstReport = readFileSync(join(benchDir, 'bench-report.md'), 'utf8');
+    const calPath = state0.calibrationPath as string;
+    const firstCal = readFileSync(calPath, 'utf8');
+
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', async (input: unknown) => {
+      calls.push(String(input));
+      throw new Error('the refit must not make HTTP calls');
+    });
+    const keys = { o: process.env.OPENROUTER_API_KEY, a: process.env.ANTHROPIC_API_KEY };
+    delete process.env.OPENROUTER_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    try {
+      await refitVrduBench({ runsRoot: join(root, 'runs'), id: state0.benchId, log: () => {} });
+    } finally {
+      if (keys.o !== undefined) process.env.OPENROUTER_API_KEY = keys.o;
+      if (keys.a !== undefined) process.env.ANTHROPIC_API_KEY = keys.a;
+    }
+    expect(calls).toEqual([]);
+    expect(bytes()).toEqual(runFiles);
+
+    const state = readJson(join(benchDir, 'bench.json'));
+    expect(state.refit).toMatchObject({ reason: 'round-2 threshold fitted on fields round 1 did not accept', previousThresholds: { t2: 0.5 } });
+    expect(state.refit.thresholds.t2).not.toBe(0.5);
+    expect(readFileSync(join(benchDir, 'bench-report.first.md'), 'utf8')).toBe(firstReport);
+    expect(readFileSync(join(benchDir, 'calibration.first.json').replace(benchDir, join(root, 'runs', state.calibrationRunId)), 'utf8')).toBe(firstCal);
+    const md = readFileSync(join(benchDir, 'bench-report.md'), 'utf8');
+    expect(md).toContain('full, first read (round-2 threshold fitted on all fields)');
+    expect(md).toContain('## Method change after the first test read');
+    expect(md).toContain('## 98% operating point');
+    const report = readJson(join(benchDir, 'bench-report.json'));
+    expect(report.thresholds.t2).toBe(state.refit.thresholds.t2);
+    expect(existsSync(join(benchDir, 'bench-report.first.json'))).toBe(true);
+
+    // a second refit does not overwrite the first copies, and keeps the first-read thresholds
+    await refitVrduBench({ runsRoot: join(root, 'runs'), id: state0.benchId, log: () => {} });
+    expect(readFileSync(join(benchDir, 'bench-report.first.md'), 'utf8')).toBe(firstReport);
+    expect(readFileSync(join(root, 'runs', state.calibrationRunId, 'calibration.first.json'), 'utf8')).toBe(firstCal);
+    expect(readJson(join(benchDir, 'bench.json')).refit.previousThresholds.t2).toBe(0.5);
+    expect(bytes()).toEqual(runFiles);
+    expect(calls).toEqual([]);
+  });
+
+  it('--refit stops when the cached answers on disk do not match the saved calibration', async () => {
+    installFakeApi();
+    const { root, options } = setup();
+    const { benchDir } = await runVrduBench(options({ id: undefined }));
+    const state = readJson(join(benchDir, 'bench.json'));
+    writeFileSync(join(root, 'runs', state.calibrationRunId, 'scores.jsonl'), '');
+    await expect(refitVrduBench({ runsRoot: join(root, 'runs'), id: state.benchId, log: () => {} })).rejects.toThrow(/does not match the saved calibration/);
   });
 });

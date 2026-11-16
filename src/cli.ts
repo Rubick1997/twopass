@@ -61,6 +61,10 @@ const USAGE = `twopass: batch LLM work, checked row by row by a decision model
       pipeline against a frontier baseline, and writes bench-report.md. Needs both
       OPENROUTER_API_KEY and ANTHROPIC_API_KEY.
 
+  twopass bench vrdu --id <benchId> --refit                 no model calls, no keys, no cost
+      refits the round-2 threshold on the calibration fields round 1 did not accept, from data on
+      disk, replays the finished test ledgers and rewrites the report (first versions are kept)
+
   twopass ui [--runs <dir>] [--port 4777] [--no-open]     no model calls, no cost
       a local web app (127.0.0.1 only) showing every run and bench with live progress;
       with OPENROUTER_API_KEY set it also shows your OpenRouter balance
@@ -109,6 +113,7 @@ async function main(argv: string[]): Promise<number> {
       split: { type: 'string' },
       also: { type: 'string' },
       id: { type: 'string' },
+      refit: { type: 'boolean' },
       data: { type: 'string' },
       delimiter: { type: 'string' },
       out: { type: 'string' },
@@ -234,6 +239,14 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     case 'bench': {
+      if (target === 'vrdu' && values.refit) {
+        // No model calls and no keys: recomputes the calibration from the run's ledger and scores.jsonl, replays the test ledgers.
+        if (!values.id) throw new UsageError('bench vrdu --refit needs --id <benchId>.');
+        const { refitVrduBench } = await import('./bench-vrdu.ts');
+        const { reportPath } = await refitVrduBench({ runsRoot, id: values.id, log });
+        log(`\nreport: ${reportPath}`);
+        return 0;
+      }
       if (target === 'vrdu') {
         if (maxUsd === undefined) throw new UsageError('bench vrdu needs --max-usd.');
         const split = values.split ?? 'test';
