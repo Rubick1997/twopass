@@ -15,10 +15,16 @@ const FIELD_INFO: Record<VrduField, { label: string; description: string }> = {
   foreign_principle_name: {
     label: 'foreign principal entry',
     description:
-      "the full contents of the form's foreign principal box, including any location line written in it; " +
-      'null when the form has no foreign principal box (a mention elsewhere in the text does not count)',
+      "the full entry written in answer to the form's foreign principal item or box, including any location line " +
+      'written in it; null when the form has no such item (a mention elsewhere in the text does not count)',
   },
-  registrant_name: { label: 'registrant name', description: 'the name of the registrant entered in the form' },
+  // Dev split, 2026-11-16: on short forms the label is the primary registrant (item 8), not the individual filer.
+  registrant_name: {
+    label: 'registrant name',
+    description:
+      'the name of the registrant, the firm or organisation registered under the Act; on a short form this is ' +
+      'the primary registrant, not the individual filing the form',
+  },
   registration_num: { label: 'registration number', description: 'the registration number entered in the form' },
   signer_name: { label: 'signer name', description: 'the printed or typed name of the person who signed the form' },
   signer_title: {
