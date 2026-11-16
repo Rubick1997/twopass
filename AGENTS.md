@@ -47,7 +47,8 @@ Run from the repo root with `node src/cli.ts <command>` (or `pnpm twopass <comma
 | `report <runId> [--write]` | Summary from the ledger plus the reviewer's `overrides.jsonl`: review progress and, with labels, accuracy without and with a human. `--write` rewrites `enriched.csv` and `review.csv` from them | no |
 | `calibrate <runId> --models jev,clef,luna` | Fit thresholds on a labeled `--collect` run | yes |
 | `bench banking77 --max-usd N [--calibration file]` | Full benchmark: downloads data, calibrates on train, runs configs on test. `--calibration` reuses an existing `calibration.json` (path recorded in `bench.json` with `calibrationReused: true`, no calibration run, its spend not counted) | yes (~$20–30 full) |
-| `bench vrdu --split dev\|test --max-usd N [--decision clef] [--also jev,luna] [--baseline claude-opus-5-5] [--target 0.95] [--id benchId]` | Extraction benchmark on FARA registration forms (6 fields per document). Writes `data/vrdu/<name>.csv`, calibrates on the calibration split (`--split dev`: 15 + 15 dev documents, **for debugging only**), runs the full pipeline and a frontier baseline on the test split, scores each `--also` checker on the round-1 values, and writes `bench-report.md` / `.json` plus `enriched-fields.csv` in both test run dirs. Needs `OPENROUTER_API_KEY` **and** `ANTHROPIC_API_KEY`. State in `runs/<benchId>/bench.json` with `kind: 'extract'`; resume with `--id` | yes |
+| `bench vrdu --split dev\|test --max-usd N [--decision clef] [--also jev,luna] [--baseline claude-opus-5-5] [--target 0.95] [--id benchId]` | Extraction benchmark on FARA registration forms (6 fields per document). Writes `data/vrdu/<name>.csv`, calibrates on the calibration split (`--split dev`: 15 + 15 dev documents, **for debugging only**), runs the full pipeline and a frontier baseline on the test split, scores each `--also` checker on the round-1 values, and writes `bench-report.md` / `.json` plus `enriched-fields.csv` in both test run dirs. Needs `OPENROUTER_API_KEY` **and** `ANTHROPIC_API_KEY`. State in `runs/<benchId>/bench.json` with `kind: 'extract'`; resume with `--id`. t2 is fitted on the slots round 1 did not accept (`verify2Conditional`), see "Extract tasks" | yes |
+| `bench vrdu --id <benchId> --refit` | No model calls, no keys: recomputes the calibration from the calibration run's ledger and `scores.jsonl`, refits t2, replays the finished test ledgers and rewrites `bench-report.*` and `enriched-fields.csv`. Keeps `calibration.first.json`, `bench-report.first.md/.json` (never overwritten), records `refit` in `bench.json`; the test runs' manifests and ledgers are not touched | no |
 | `ui [--runs dir] [--port 4777] [--no-open]` | Local web app (127.0.0.1 only) with every run and bench, live, and the review queue for flagged rows. Needs `pnpm build` first | no (only GET `/credits` for the balance, if a key is set) |
 
 **Runs normalize their input.** `run` and `bench` call `checkCsv` (`src/check.ts`) first and refuse to start on any
@@ -224,6 +225,15 @@ value; `collect` mode asks every field in both rounds). `computeFieldOutcomes` (
 calibration point per field slot. The `label` column holds whatever `isCorrect` expects (VRDU: the gold map as JSON);
 `check` validates it as a map of field to list of strings, not against the output schema. A document counts as correct in
 reports when every field is; `acceptedAtRound` in `pipeline.ts` is the one "accepted at round N" test for both task kinds.
+**Round-2 threshold.** Round 2 only decides the fields round 1 did not accept, so t2 is fitted on those: `buildCalibration`
+(`runner.ts`) adds `verify2Conditional` (a normal `StageCalibration`) next to `verify1` / `verify2`, built from the verify2
+slots whose verify1 answer (same model) `verifyOutcome` does not accept at that model's fitted t1 (`unacceptedRound2Points`
+in `score.ts`; a NEVER t1 means every slot). `verify2` stays as the all-slots fit for the record, and
+`thresholdsFromCalibration` uses the conditional fit when present. `operatingPoints['0.98']` holds the verify1 and conditional
+verify2 fits at 98% (refit only, no new calls); the report's `## 98% operating point` replays them. Refit is valid as a replay
+because `verifyRound` and `computeFieldOutcomes` both ask / read verify2 for exactly `unacceptedFields(..., t1)`; only the
+accept decision at t2 changes. `assertReplayable` (`bench-vrdu.ts`) stops if a needed round-2 answer is missing from the ledger.
+The report takes thresholds from `bench.json` `refit.thresholds` when present, else the normal run's manifest.
 Overrides and the review queue are not built for extract runs yet.
 
 ## Prompt caching
