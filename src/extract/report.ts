@@ -95,7 +95,30 @@ export interface CalibrationFacts {
   runId: string;
   documents: number;
   /** Per decision model, slot counts behind each stage's fit. */
-  models: Record<string, { verify1?: { slots: number; wrong: number }; verify2?: { slots: number; wrong: number } }>;
+  models: Record<
+    string,
+    {
+      verify1?: { slots: number; wrong: number };
+      verify2?: { slots: number; wrong: number };
+      /** verify2 restricted to the slots the same model's verify1 did not accept. */
+      verify2Conditional?: { slots: number; wrong: number };
+    }
+  >;
+}
+
+/** The test split was read once with thresholds fitted the first way, then the round-2 threshold was refitted. */
+export interface RefitInput {
+  at: string;
+  /** Thresholds of the first read. */
+  previousThresholds: Thresholds;
+  reason: string;
+}
+
+/** The 98% operating point: the decision model's thresholds at that target, and every checker's round-1 threshold. */
+export interface OperatingInput {
+  target: number;
+  thresholds: Thresholds;
+  checkers: CheckerInput[];
 }
 
 /** What `check` did to the document text on its way into the runs (see bench-vrdu.ts). */
@@ -126,6 +149,8 @@ export interface ExtractReportInput {
   target: number;
   maxAttempts?: number;
   textCheck?: TextCheck;
+  refit?: RefitInput;
+  operating?: OperatingInput;
 }
 
 export interface ExtractReport {
@@ -151,6 +176,10 @@ export interface ExtractReport {
   presence: Record<'full' | 'simple', { present: SlotMetrics; absent: SlotMetrics }>;
   perField: Record<'full' | 'simple', Record<string, SlotMetrics>>;
   checkers: CheckerResult[];
+  /** Present when the thresholds were refitted after the first read of the test split. */
+  refit: (RefitInput & { fullFirstRead: ConfigMetrics }) | null;
+  /** Replay at the 98% operating point; null when the calibration has none. */
+  operatingPoint: { target: number; thresholds: Thresholds; simple: ConfigMetrics; full: ConfigMetrics; checkers: CheckerResult[] } | null;
   calibration: CalibrationFacts;
   textCheck: TextCheck | null;
   minutes: { normal: { rounds: RoundTiming[]; total: number }; baseline: { rounds: RoundTiming[]; total: number } };
@@ -229,8 +258,10 @@ export function buildExtractReport(i: ExtractReportInput): ExtractReport {
   const fpd = fields.length;
 
   const baselineSlots = slotsOf(computeFieldOutcomes(i.baseline, { ...ctx, mode: 'baseline' }), rows);
-  const fullSlots = slotsOf(computeFieldOutcomes(i.normal, { ...ctx, mode: 'normal' }), rows);
-  const simpleSlots = slotsOf(computeFieldOutcomes(i.normal, { ...ctx, mode: 'normal' }, { maxRound: 1 }), rows);
+  const replayAt = (thresholds: Thresholds, maxRound?: 1) =>
+    slotsOf(computeFieldOutcomes(i.normal, { ...ctx, thresholds, mode: 'normal' }, maxRound ? { maxRound } : {}), rows);
+  const fullSlots = replayAt(i.thresholds);
+  const simpleSlots = replayAt(i.thresholds, 1);
 
   // writer alone: the round-1 values, no checker
   const alone: Slot[] = [];
@@ -287,6 +318,16 @@ export function buildExtractReport(i: ExtractReportInput): ExtractReport {
     presence: { full: split(fullSlots), simple: split(simpleSlots) },
     perField: { full: perField(fullSlots), simple: perField(simpleSlots) },
     checkers: i.checkers.map((c) => checkerResult(c, i)),
+    refit: i.refit ? { ...i.refit, fullFirstRead: config(replayAt(i.refit.previousThresholds), i.normal, ALL_STAGES) } : null,
+    operatingPoint: i.operating
+      ? {
+          target: i.operating.target,
+          thresholds: i.operating.thresholds,
+          simple: config(replayAt(i.operating.thresholds, 1), i.normal, ['write1', 'verify1']),
+          full: config(replayAt(i.operating.thresholds), i.normal, ALL_STAGES),
+          checkers: i.operating.checkers.map((c) => checkerResult(c, i)),
+        }
+      : null,
     calibration: i.calibration,
     textCheck: i.textCheck ?? null,
     minutes: {
@@ -386,6 +427,48 @@ function metricRow(label: string, m: SlotMetrics): string {
   return `| ${label} | ${n0(m.fields)} | ${pct(m.acceptedShare)} | ${pct(m.precision)} | ${n0(m.confidentWrong)} | ${pct(m.flaggedShare)} | ${pct(m.flaggedOwnRight)} | ${pct(m.accuracy)} |`;
 }
 
+const th3 = (x: number) => (x > 1 ? 'never' : x.toFixed(3));
+
+function methodChange(r: ExtractReport, f: NonNullable<ExtractReport['refit']>): string[] {
+  const a = f.fullFirstRead;
+  const b = r.configs.full;
+  const acc = (m: ConfigMetrics) => `${n0(m.accepted)} fields accepted (${pct(m.acceptedShare)}) at ${pct(m.precision)} precision`;
+  return [
+    '',
+    '## Method change after the first test read',
+    '',
+    `The round-2 threshold was first fitted on all calibration fields. In a real run, round 2 only decides the fields round 1 did not accept, ` +
+      `which are the harder ones, so that fit did not match the population it was used on. The test split had already been read once with it ` +
+      `(t2 = ${th3(f.previousThresholds.t2)}: ${acc(a)} for the full pipeline). The threshold was then refitted on the calibration fields that round 1 ` +
+      `did not accept (t2 = ${th3(r.thresholds.t2)}: ${acc(b)}). The new threshold uses calibration data only, and no model calls were made to ` +
+      `produce it: the test ledgers were replayed under the new value, and round 1 (t1 = ${th3(r.thresholds.t1)}) did not change. ` +
+      'Both reads are shown in the configurations table.',
+  ];
+}
+
+function operatingSection(r: ExtractReport, o: NonNullable<ExtractReport['operatingPoint']>): string[] {
+  const label = pct(o.target, 0);
+  const L: string[] = ['', `## ${label} operating point`, ''];
+  L.push(
+    `The same calibration refitted for ${label} precision, replayed on the test split by pure replay (no model calls). ` +
+      `For \`${r.decisionModel}\`: t1 = ${th3(o.thresholds.t1)}, t2 = ${th3(o.thresholds.t2)}; t2 is fitted on the fields round 1 did not accept at that t1.`,
+    '',
+  );
+  if (o.thresholds.t1 > 1) L.push(`For t1, no threshold reaches ${label}: round 1 accepts nothing, so every field goes to round 2.`, '');
+  if (o.thresholds.t2 > 1) L.push(`For t2, no threshold reaches ${label}: round 2 accepts nothing, so every field round 1 did not accept goes to a person.`, '');
+  L.push('| Configuration | Fields | Accepted | Precision | Confident wrong | Sent to a person |', '|---|---|---|---|---|---|');
+  const row = (name: string, m: ConfigMetrics) =>
+    `| ${name} | ${n0(m.fields)} | ${pct(m.acceptedShare)} | ${pct(m.precision)} | ${n0(m.confidentWrong)} (${pct(m.confidentWrongShare, 2)}) | ${pct(m.flaggedShare)} |`;
+  L.push(row('simple (writer, checker, person)', o.simple), row('full (with the stronger re-extraction)', o.full));
+  L.push('', `Round 1 for each checker at its ${label} threshold:`, '');
+  L.push('| Checker | Threshold | Slots | Accepted | Precision | Confident wrong |', '|---|---|---|---|---|---|');
+  for (const c of o.checkers) {
+    if (c.threshold > 1) L.push(`| ${c.model} | no threshold reaches ${label} | ${n0(c.slots)} | n/a | n/a | n/a |`);
+    else L.push(`| ${c.model} | ${c.threshold.toFixed(3)} | ${n0(c.slots)} | ${pct(c.acceptedShare)} | ${pct(c.precision)} | ${n0(c.confidentWrong)} |`);
+  }
+  return L;
+}
+
 export function renderExtractReport(r: ExtractReport): string {
   const L: string[] = [headline(r), ''];
   L.push(`# Bench ${r.benchId}: VRDU extraction (${r.split} split)`, '');
@@ -406,7 +489,10 @@ export function renderExtractReport(r: ExtractReport): string {
   L.push(`| writer alone (round-1 values, no checker) | ${n0(w.fields)} | n/a | n/a | n/a | n/a | n/a | ${pct(w.accuracy)} | ${usd3(w.costPer1kFields.total)} |`);
   L.push(row('simple (writer, checker, person)', r.configs.simple));
   L.push(row('full (with the stronger re-extraction)', r.configs.full));
+  if (r.refit) L.push(row('full, first read (round-2 threshold fitted on all fields)', r.refit.fullFirstRead));
   if (w.unusableDocuments) L.push('', `Writer alone: ${n0(w.unusableDocuments)} document(s) had no usable reply; their fields count as wrong.`);
+
+  if (r.refit) L.push(...methodChange(r, r.refit));
 
   L.push('', '## Cost by stage, USD per 1,000 documents', '');
   L.push('| Configuration | Write 1 | Verify 1 | Write 2 | Verify 2 | Total | Per 1,000 fields |', '|---|---|---|---|---|---|---|');
@@ -439,15 +525,18 @@ export function renderExtractReport(r: ExtractReport): string {
     );
   }
 
+  if (r.operatingPoint) L.push(...operatingSection(r, r.operatingPoint));
+
   L.push('', '## Thresholds', '');
   const th = (x: number) => (x > 1 ? 'never' : x.toFixed(3));
   L.push(`Used by \`${r.decisionModel}\`: t1 = ${th(r.thresholds.t1)}, t2 = ${th(r.thresholds.t2)} (t0 unused: no triage). Source: ${r.thresholdsSource}. Target precision ${pct(r.target, 0)}.`, '');
   L.push(`Fitted on ${n0(r.calibration.documents)} calibration documents (run \`${r.calibration.runId}\`), one point per field slot:`, '');
   L.push('| Model | Stage | Slots | Wrong slots |', '|---|---|---|---|');
   for (const [model, stages] of Object.entries(r.calibration.models)) {
-    for (const stage of ['verify1', 'verify2'] as const) {
+    for (const stage of ['verify1', 'verify2', 'verify2Conditional'] as const) {
       const s = stages[stage];
-      if (s) L.push(`| ${model} | ${stage} | ${n0(s.slots)} | ${n0(s.wrong)} |`);
+      const label = stage === 'verify2Conditional' ? 'verify2Conditional (slots round 1 did not accept)' : stage;
+      if (s) L.push(`| ${model} | ${label} | ${n0(s.slots)} | ${n0(s.wrong)} |`);
     }
   }
 

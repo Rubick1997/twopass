@@ -211,3 +211,46 @@ describe('enriched-fields.csv records', () => {
     expect(out[0]).toMatchObject({ value: "'=SUM(1)", gold: "'=SUM(1) | p", correct: 'true' });
   });
 });
+
+describe('refit and 98% sections', () => {
+  const base = { benchId: 'b', createdAt: at, split: 'test' as const, task: toyTask, rows, normal, baseline, thresholdsSource: 's', decisionModel: 'dec', baselineModel: 'opus', target: 0.95 };
+  const cal = { runId: 'c', documents: 300, models: { dec: { verify1: { slots: 1800, wrong: 90 }, verify2: { slots: 1800, wrong: 200 }, verify2Conditional: { slots: 700, wrong: 250 } } } };
+  const checker = (threshold: number) => ({ model: 'dec', threshold, answers: r1Answers });
+
+  it('adds the first-read row and the method-change section after a refit, computed with the previous thresholds', () => {
+    const r = buildExtractReport({
+      ...base,
+      thresholds: { t0: 1.01, t1: 0.9, t2: 0.6 },
+      checkers: [checker(0.9)],
+      calibration: cal,
+      refit: { at, previousThresholds: { t0: 1.01, t1: 0.9, t2: 0.1 }, reason: 'why' },
+    });
+    // D3 c has p .5: accepted at the old t2 (.1), not at the new one (.6)
+    expect(r.refit!.fullFirstRead.accepted).toBe(11);
+    expect(r.configs.full.accepted).toBe(10);
+    const md = renderExtractReport(r);
+    expect(md).toContain('| full, first read (round-2 threshold fitted on all fields) |');
+    expect(md).toContain('## Method change after the first test read');
+    expect(md).toContain('t2 = 0.100');
+    expect(md).toContain('t2 = 0.600');
+    expect(md).toContain('no model calls were made');
+    expect(md).toContain('verify2Conditional (slots round 1 did not accept) | 700 | 250 |');
+    expect(md).not.toContain('\u2014');
+    expect(renderExtractReport(buildExtractReport({ ...base, thresholds, checkers: [checker(0.9)], calibration: cal }))).not.toContain('Method change');
+  });
+
+  it('renders the 98% section, and says no threshold reaches 98% for a NEVER fit', () => {
+    const op = { target: 0.98, thresholds: { t0: 1.01, t1: 0.9, t2: 1.01 }, checkers: [checker(0.9), { ...checker(1.01), model: 'other' }] };
+    const r = buildExtractReport({ ...base, thresholds, checkers: [checker(0.9)], calibration: cal, operating: op });
+    expect(r.operatingPoint!.full.fields).toBe(12);
+    expect(r.operatingPoint!.simple.accepted).toBe(6);
+    const md = renderExtractReport(r);
+    expect(md).toContain('## 98% operating point');
+    expect(md).toContain('t2 = never');
+    expect(md).toContain('For t2, no threshold reaches 98%');
+    expect(md).toContain('| other | no threshold reaches 98% |');
+    expect(md).not.toContain('For t1, no threshold');
+    const none = renderExtractReport(buildExtractReport({ ...base, thresholds, checkers: [], calibration: cal }));
+    expect(none).not.toContain('98% operating point');
+  });
+});
