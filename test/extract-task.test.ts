@@ -48,11 +48,11 @@ describe('the VRDU task', () => {
   });
 
   it('asks a value question and a null question, both with cannot_tell', () => {
-    const v = ex.question('registrant_name', 'ACME LLC');
-    expect(v.instructions).toBe('The writer says the registrant name (the name of the registrant entered in the form) in this document is "ACME LLC". Is that right?');
+    const v = ex.question('registration_num', '5875');
+    expect(v.instructions).toBe('The writer says the registration number (the registration number entered in the form) in this document is "5875". Is that right?');
     expect(v.criteria).toEqual({
-      supported: 'The document gives this value for the registrant name',
-      unsupported: 'The document gives a different registrant name, or none',
+      supported: 'The document gives this value for the registration number',
+      unsupported: 'The document gives a different registration number, or none',
       cannot_tell: 'It is not possible to tell from the document',
     });
     const n = ex.question('file_date', null);
