@@ -3,9 +3,10 @@ import { join } from 'node:path';
 import { Budget } from './budget.ts';
 import { asChoice, CANNOT_TELL, type Answer, type DecisionModel } from './decide/model.ts';
 import { verifyKey, type RunState } from './ledger.ts';
-import type { Point } from './calibrate.ts';
+import { fitThreshold, type Point, type ThresholdFit } from './calibrate.ts';
 import type { RowRecord } from './pipeline.ts';
 import { parseExtraction, parseWriterOutput, verifyQuestion, verifyState, type TaskDefinition } from './task.ts';
+import { verifyOutcome } from './verdict.ts';
 
 // Turns a labeled run into (score, p, correct) points per decision model and stage.
 // The run's own triage/verify answers come from its ledger. Other models are asked the same
@@ -28,9 +29,39 @@ export interface ScoreRecord {
   latencyMs: number;
 }
 
+/** An extraction slot of the round-2 checker, with the SAME model's round-1 answer for the same field. */
+export interface Verify2Slot {
+  point: Point;
+  /** Undefined when the model gave no round-1 answer (e.g. the round-1 reply was unusable): the field was not accepted. */
+  verify1: Answer | undefined;
+}
+
+/**
+ * The round-2 points that matter in a real run: the slots round 1 did NOT accept at `t1`. "Accept" is the pipeline's own
+ * rule (`verifyOutcome`). With `t1 = NEVER` nothing is accepted, so every slot is in.
+ */
+export function unacceptedRound2Points(slots: Verify2Slot[], t1: number): Point[] {
+  return slots.filter((s) => !verifyOutcome(asChoice(s.verify1), t1).accepted).map((s) => s.point);
+}
+
+export interface ConditionalFit {
+  /** The round-1 fit the round-2 population is conditional on. */
+  verify1: ThresholdFit;
+  verify2Conditional: ThresholdFit & { n: number; correct: number };
+}
+
+/** Fits verify1 at `target`, then verify2 on the slots that verify1 threshold did not accept. */
+export function conditionalFit(verify1: Point[], slots: Verify2Slot[], target: number): ConditionalFit {
+  const fit1 = fitThreshold(verify1, target);
+  const pts = unacceptedRound2Points(slots, fit1.threshold);
+  return { verify1: fit1, verify2Conditional: { ...fitThreshold(pts, target), n: pts.length, correct: pts.filter((p) => p.correct).length } };
+}
+
 export interface ModelPoints {
   model: string;
   points: Record<Stage, Point[]>;
+  /** Extraction tasks only: the verify2 points, each with this model's own verify1 answer for the slot. */
+  verify2Slots?: Verify2Slot[];
   /** Paid in this call (cached and ledger answers are free). */
   spentUsd: number;
 }
@@ -199,6 +230,7 @@ export async function scoreRun(opts: ScoreOptions): Promise<ModelPoints[]> {
     }
 
     const points: Record<Stage, Point[]> = { triage: [], verify1: [], verify2: [] };
+    const verify2Slots: Verify2Slot[] = [];
     for (const row of records) {
       const label = row.data[labelColumn] ?? '';
       if (task.extract) {
@@ -208,7 +240,9 @@ export async function scoreRun(opts: ScoreOptions): Promise<ModelPoints[]> {
           const values = extractValues.get(`${stage === 'verify1' ? 1 : 2}|${row.id}`)!;
           for (const f of task.extract.fields) {
             const value = values[f] ?? null;
-            points[stage].push(verifyPoint(answers[f], task.extract.isCorrect(f, value, label)));
+            const point = verifyPoint(answers[f], task.extract.isCorrect(f, value, label));
+            points[stage].push(point);
+            if (stage === 'verify2') verify2Slots.push({ point, verify1: fieldAnswers.verify1.get(row.id)?.[f] });
           }
         }
         continue;
@@ -219,7 +253,7 @@ export async function scoreRun(opts: ScoreOptions): Promise<ModelPoints[]> {
         points[stage].push(verifyPoint(verdicts[stage].get(row.id), writerAnswers[stage].get(row.id) === label));
       }
     }
-    out.push({ model, points, spentUsd });
+    out.push({ model, points, ...(task.extract ? { verify2Slots } : {}), spentUsd });
   }
   return out;
 }
