@@ -459,7 +459,11 @@ function operatingSection(r: ExtractReport, o: NonNullable<ExtractReport['operat
   L.push('| Configuration | Fields | Accepted | Precision | Confident wrong | Sent to a person |', '|---|---|---|---|---|---|');
   const row = (name: string, m: ConfigMetrics) =>
     `| ${name} | ${n0(m.fields)} | ${pct(m.acceptedShare)} | ${pct(m.precision)} | ${n0(m.confidentWrong)} (${pct(m.confidentWrongShare, 2)}) | ${pct(m.flaggedShare)} |`;
-  L.push(row('simple (writer, checker, person)', o.simple), row('full (with the stronger re-extraction)', o.full));
+  L.push(row('simple (writer, checker, person)', o.simple));
+  // A stricter t1 sends more fields to round 2 than the run asked about; those have no round-2 answer to replay.
+  if (o.full.pending > 0) {
+    L.push(`| full (with the stronger re-extraction) | ${n0(o.full.fields)} | not replayable: ${n0(o.full.pending)} fields would need a round-2 answer the run did not ask for | | | |`);
+  } else L.push(row('full (with the stronger re-extraction)', o.full));
   L.push('', `Round 1 for each checker at its ${label} threshold:`, '');
   L.push('| Checker | Threshold | Slots | Accepted | Precision | Confident wrong |', '|---|---|---|---|---|---|');
   for (const c of o.checkers) {
