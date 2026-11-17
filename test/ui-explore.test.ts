@@ -9,8 +9,12 @@ import { matchesLabel } from '../src/report.ts';
 import { Ledger, replay as replayLedger } from '../src/ledger.ts';
 import { loadRun } from '../src/run.ts';
 import { loadTask } from '../src/task.ts';
-import { buildExploreRows, getBenchExplore, NotFoundError, readScoreRecords, repriceRows, runCaching, unitCostsFrom } from '../src/ui/api.ts';
+import { buildExploreRows, getBenchExplore as getBenchExploreAny, NotFoundError, readScoreRecords, repriceRows, runCaching, unitCostsFrom } from '../src/ui/api.ts';
 import { tempDir } from './helpers.ts';
+import type { ExploreResponse } from '../src/ui/api-types.ts';
+
+// These benches are closed-choice: narrow the union the API returns.
+const getBenchExplore = async (...a: Parameters<typeof getBenchExploreAny>) => (await getBenchExploreAny(...a)) as ExploreResponse;
 import { CLEF, EXPLORE_ROWS, exploreBench, exploreRun, exploreRunLarge, JEV, makeRoot, makeRun, TASK, writeBench } from './ui-fixtures.ts';
 import { exploreHref, parseHash } from '../ui/src/hooks.ts';
 import {

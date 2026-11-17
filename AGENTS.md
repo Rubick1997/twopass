@@ -153,6 +153,8 @@ tasks/              task files (banking77.task.ts, vrdu.task.ts)
 ui/                 the browser app (Vite + React, own tsconfig), built to dist/ui
   ui/src/explore.ts        threshold replay + live refit, waffle counts and plain names for the results explorer (pure)
   ui/src/pages/Explore.tsx results explorer page: three tabs, inline SVG charts, no chart library
+  ui/src/pages/ExploreExtract.tsx, ui/src/explore-extract.ts   the same for extraction benches (replay is pure)
+  ui/src/pages/ReviewExtract.tsx, ui/src/review-extract.ts     the review page for flagged fields, with the document text highlighted
 bench/vrdu/         splits.json (committed dev / calibration / test document IDs)
 scripts/            dataset fetch (fetch:banking77, fetch:vrdu, split:vrdu), contamination check, fake-live-run.ts (UI demo, no cost)
 test/               vitest, HTTP mocked through test/helpers.ts
@@ -234,7 +236,13 @@ verify2 fits at 98% (refit only, no new calls); the report's `## 98% operating p
 because `verifyRound` and `computeFieldOutcomes` both ask / read verify2 for exactly `unacceptedFields(..., t1)`; only the
 accept decision at t2 changes. `assertReplayable` (`bench-vrdu.ts`) stops if a needed round-2 answer is missing from the ledger.
 The report takes thresholds from `bench.json` `refit.thresholds` when present, else the normal run's manifest.
-Overrides and the review queue are not built for extract runs yet.
+**Review and explorer for extract runs.** Decisions are per field: `overrides.jsonl` lines carry `field` (required for extract
+runs, refused for others; an override's answer is text or `null` = "not in this document"), folded per (rowId, field) by
+`foldFieldOverrides` (`src/extract/review.ts`, with the span finder that locates a value in the text). The review uses the thresholds the
+bench report used (`bench.json` `refit.thresholds`, else the manifest's). `report <runId> --write` and the UI's "Write output files"
+rewrite only `enriched-fields.csv`, adding `reviewed_by_human`, `final_value`, `review_note`. The explorer's calibration slots come from
+`scoreRun` in `ledgerOnly` mode (`fieldSlots`); `ui/src/explore-extract.ts` replays them and must stay equal to `computeFieldOutcomes`
+(`test/ui-explore-extract.test.ts`) and refit the thresholds `buildCalibration` stores.
 
 ## Prompt caching
 

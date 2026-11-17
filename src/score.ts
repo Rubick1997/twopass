@@ -57,9 +57,28 @@ export function conditionalFit(verify1: Point[], slots: Verify2Slot[], target: n
   return { verify1: fit1, verify2Conditional: { ...fitThreshold(pts, target), n: pts.length, correct: pts.filter((p) => p.correct).length } };
 }
 
+/**
+ * One field slot of a calibration document, for replaying the pipeline under other thresholds (the UI's explorer).
+ * `correct*` do not depend on the checker; `answer*` are this checker's answers (undefined: it gave none).
+ */
+export interface FieldSlotAnswers {
+  rowId: string;
+  field: string;
+  /** The gold label states a value for this field. */
+  goldPresent: boolean;
+  /** The round-1 value is right. False when round 1 gave no usable reply. */
+  correct1: boolean;
+  /** The round-2 value is right; null when round 2 gave no usable reply. */
+  correct2: boolean | null;
+  answer1: Answer | undefined;
+  answer2: Answer | undefined;
+}
+
 export interface ModelPoints {
   model: string;
   points: Record<Stage, Point[]>;
+  /** Extraction tasks only: every field slot of every row, with this model's round-1 and round-2 answers. */
+  fieldSlots?: FieldSlotAnswers[];
   /** Extraction tasks only: the verify2 points, each with this model's own verify1 answer for the slot. */
   verify2Slots?: Verify2Slot[];
   /** Paid in this call (cached and ledger answers are free). */
@@ -81,6 +100,16 @@ export interface ScoreOptions {
   /** Use only answers already in the ledger or cache; never call a model (reports). */
   ledgerOnly?: boolean;
   log?: (m: string) => void;
+}
+
+/** Does the label cell (a JSON map of field to list of gold values) state a value for `field`? */
+export function goldHasValue(label: string, field: string): boolean {
+  try {
+    const g = (JSON.parse(label) as Record<string, unknown>)[field];
+    return Array.isArray(g) && g.some((x) => typeof x === 'string' && x.trim() !== '');
+  } catch {
+    return false;
+  }
 }
 
 export function triagePoint(answer: Answer | undefined, label: string): Point {
@@ -231,9 +260,23 @@ export async function scoreRun(opts: ScoreOptions): Promise<ModelPoints[]> {
 
     const points: Record<Stage, Point[]> = { triage: [], verify1: [], verify2: [] };
     const verify2Slots: Verify2Slot[] = [];
+    const fieldSlots: FieldSlotAnswers[] = [];
     for (const row of records) {
       const label = row.data[labelColumn] ?? '';
       if (task.extract) {
+        const v1 = extractValues.get(`1|${row.id}`);
+        const v2 = extractValues.get(`2|${row.id}`);
+        for (const f of task.extract.fields) {
+          fieldSlots.push({
+            rowId: row.id,
+            field: f,
+            goldPresent: goldHasValue(label, f),
+            correct1: v1 ? task.extract.isCorrect(f, v1[f] ?? null, label) : false,
+            correct2: v2 ? task.extract.isCorrect(f, v2[f] ?? null, label) : null,
+            answer1: fieldAnswers.verify1.get(row.id)?.[f],
+            answer2: fieldAnswers.verify2.get(row.id)?.[f],
+          });
+        }
         for (const stage of ['verify1', 'verify2'] as const) {
           const answers = fieldAnswers[stage].get(row.id);
           if (!answers) continue;
@@ -253,7 +296,7 @@ export async function scoreRun(opts: ScoreOptions): Promise<ModelPoints[]> {
         points[stage].push(verifyPoint(verdicts[stage].get(row.id), writerAnswers[stage].get(row.id) === label));
       }
     }
-    out.push({ model, points, ...(task.extract ? { verify2Slots } : {}), spentUsd });
+    out.push({ model, points, ...(task.extract ? { verify2Slots, fieldSlots } : {}), spentUsd });
   }
   return out;
 }

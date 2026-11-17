@@ -3,7 +3,7 @@ import { join, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import type { BenchState } from '../bench.ts';
 import { requiredColumns } from '../check.ts';
-import { asChoice, CANNOT_TELL } from '../decide/model.ts';
+import { asChoice, CANNOT_TELL, type Answer } from '../decide/model.ts';
 import type { FetchFn } from '../http.ts';
 import { customId, parseLedger, replay, verifyKey, type LedgerEvent, type RunState } from '../ledger.ts';
 import { isLockLive, isPidAlive, readRunLock } from '../lock.ts';
@@ -13,6 +13,7 @@ import {
   appendOverride,
   decisionInputSchema,
   foldOverrides,
+  makeFieldOverride,
   makeOverride,
   MAX_ANSWER_CHARS,
   MAX_NOTE_CHARS,
@@ -22,12 +23,26 @@ import {
   readOverrides,
   type FoldedOutcome,
 } from '../overrides.ts';
-import { documentCorrectness } from '../extract/outcomes.ts';
+import { computeFieldOutcomes, documentCorrectness, type FieldOutcome } from '../extract/outcomes.ts';
+import {
+  effectiveThresholds,
+  fieldReviewSummary,
+  findSpans,
+  foldFieldOverrides,
+  isUnusable,
+  labelReader,
+  readRunState,
+  rewriteFieldOutputs,
+  type FieldReviewSummary,
+  type FoldedField,
+} from '../extract/review.ts';
 import { matchesLabel, reviewSummary, rewriteOutputs, summarize, type ReviewSummary } from '../report.ts';
 import type { BenchReport } from '../bench.ts';
-import { readCalibration } from '../runner.ts';
+import { noCallModel, readCalibration } from '../runner.ts';
+import type { VrduBenchState } from '../bench-vrdu.ts';
 import type { ScoreRecord } from '../score.ts';
 import { loadRun, type RunManifest } from '../run.ts';
+import { scoreRun } from '../score.ts';
 import { batchDurationMs, median, spendByStage, type StageSpend } from '../stats.ts';
 import { bucketsFromOpenRouter } from '../cost/usage.ts';
 import { loadTask, parseExtraction, parseWriterOutput, render, type TaskDefinition } from '../task.ts';
@@ -47,12 +62,24 @@ import type {
   ExploreCaching,
   RunCachingKind,
   ExploreResponse,
+  ExtractChoice,
+  ExtractExploreCalibration,
+  ExtractExploreResponse,
+  ExtractReportData,
+  ExtractSlot,
   ExploreRow,
   ExploreThresholds,
   OutcomeCounts,
   OutputsResponse,
   OverrideResponse,
   Reserve,
+  ClassifyOverrideResponse,
+  ClassifyReviewResponse,
+  ExtractOverrideResponse,
+  ExtractReviewCounts,
+  ExtractReviewResponse,
+  FieldItem,
+  FieldRoundInfo,
   ReviewAccuracy,
   ReviewCounts,
   ReviewFilter,
@@ -894,21 +921,20 @@ interface ExploreCacheEntry {
   value: ExploreResponse;
 }
 const exploreCache = new Map<string, ExploreCacheEntry>();
+const extractExploreCache = new Map<string, { key: string; value: ExtractExploreResponse }>();
 
 /**
  * Everything the results explorer needs for one bench: the test-split table and reliability bins from
  * bench-report.json, and the calibration run's rows for the threshold replay. Without the calibration
  * run folder, the table and reliability are still returned, with `calibration: null` and a reason.
  */
-export async function getBenchExplore(runsRoot: string, benchId: string): Promise<ExploreResponse> {
+export async function getBenchExplore(runsRoot: string, benchId: string): Promise<ExploreResponse | ExtractExploreResponse> {
   const dir = resolveInside(runsRoot, benchId);
   const reportPath = join(dir, 'bench-report.json');
   if (!existsSync(join(dir, 'bench.json'))) throw new NotFoundError(`No bench ${benchId}`);
   if (!existsSync(reportPath)) throw new NotFoundError(`Bench ${benchId} has no bench-report.json yet`);
   const state = readBench(dir);
-  if (state.kind === 'extract') {
-    throw new NotFoundError(`Bench ${benchId} is an extraction bench: the results explorer is not built for it yet. Read bench-report.md instead.`);
-  }
+  if (state.kind === 'extract') return getExtractExplore(runsRoot, benchId, dir, state as unknown as VrduBenchState);
 
   // The calibration run: its own id, or (reused calibration) the run named inside calibration.json.
   let calibRunId = state.calibrationRunId;
@@ -1034,6 +1060,7 @@ export async function getBenchExplore(runsRoot: string, benchId: string): Promis
   }
 
   const value: ExploreResponse = {
+    kind: 'classify',
     benchId: report.benchId ?? benchId,
     createdAt: typeof report.createdAt === 'string' ? report.createdAt : null,
     target: report.target,
@@ -1069,6 +1096,112 @@ export async function getBenchExplore(runsRoot: string, benchId: string): Promis
     calibrationMissingReason: calibration ? null : (reason ?? 'The calibration run is not available.'),
   };
   exploreCache.set(dir, { key, value });
+  return value;
+}
+
+// ---------------------------------------------------------------- explorer for extraction benches
+
+const choiceLite = (a: Answer | undefined): ExtractChoice | null => {
+  const c = asChoice(a);
+  if (!c) return null;
+  return { choice: c.choice === 'supported' || c.choice === 'unsupported' ? c.choice : 'cannot_tell', p: c.probabilities.supported ?? 0 };
+};
+
+/**
+ * Calibration field slots for the replay in ui/src/explore-extract.ts, from the bench's calibration run: the same ledger-only
+ * `scoreRun` the refit uses (the run's own checker from its ledger, the others from scores.jsonl; no model is called, no key
+ * is read). Without the calibration run folder: the report alone, `calibration: null` and a reason.
+ */
+async function getExtractExplore(runsRoot: string, benchId: string, dir: string, state: VrduBenchState): Promise<ExtractExploreResponse> {
+  const reportPath = join(dir, 'bench-report.json');
+  const report = JSON.parse(readFileSync(reportPath, 'utf8')) as ExtractReportData;
+  const models = [state.decision, ...(state.also ?? [])];
+
+  let reason: string | null = null;
+  let calibDir: string | null = null;
+  if (!state.calibrationRunId) reason = 'This bench has no calibration run.';
+  else {
+    calibDir = resolveInside(runsRoot, state.calibrationRunId);
+    if (!existsSync(join(calibDir, 'manifest.json'))) {
+      reason = `The calibration run ${state.calibrationRunId} is not in the runs folder.`;
+      calibDir = null;
+    }
+  }
+  const key = [reportPath, join(dir, 'bench.json'), ...(calibDir ? ['manifest.json', 'ledger.jsonl', 'scores.jsonl', 'rows.jsonl'].map((f) => join(calibDir!, f)) : [])]
+    .map(statKey)
+    .join('|');
+  const hit = extractExploreCache.get(dir);
+  if (hit && hit.key === key) return hit.value;
+
+  let calibration: ExtractExploreCalibration | null = null;
+  if (calibDir) {
+    try {
+      const { manifest, records } = loadRun(calibDir);
+      const task = await loadTask(manifest.taskPath);
+      if (!manifest.labelColumn) reason = `The calibration run ${manifest.runId} has no label column.`;
+      else if (!task.extract) reason = `The calibration run ${manifest.runId} is not an extraction run.`;
+      else {
+        const scored = await scoreRun({
+          dir: calibDir,
+          task,
+          records,
+          labelColumn: manifest.labelColumn,
+          st: readRunState(calibDir),
+          runModels: { triage: manifest.models.triage, verify: manifest.models.verify },
+          models: models.map(noCallModel),
+          ledgerOnly: true,
+        });
+        const slots = new Map<string, ExtractSlot>();
+        for (const s of scored) {
+          for (const f of s.fieldSlots ?? []) {
+            const k = `${f.rowId}\u0000${f.field}`;
+            const slot = slots.get(k) ?? { docId: f.rowId, field: f.field, goldPresent: f.goldPresent, correct1: f.correct1, correct2: f.correct2, a: {} };
+            slot.a[s.model] = { r1: choiceLite(f.answer1), r2: choiceLite(f.answer2) };
+            slots.set(k, slot);
+          }
+        }
+        const fitsByModel: ExtractExploreCalibration['fitsByModel'] = {};
+        try {
+          if (state.calibrationPath) {
+            for (const [m, e] of Object.entries(readCalibration(state.calibrationPath).models)) {
+              fitsByModel[m] = {
+                ...(e.verify1 ? { verify1: e.verify1.fit.threshold } : {}),
+                ...(e.verify2Conditional ? { verify2Conditional: e.verify2Conditional.fit.threshold } : {}),
+              };
+            }
+          }
+        } catch {
+          // no calibration.json: the page just has nothing to compare with
+        }
+        calibration = {
+          runId: manifest.runId,
+          documents: records.length,
+          models: scored.filter((s) => (s.fieldSlots ?? []).some((f) => f.answer1 || f.answer2)).map((s) => s.model),
+          fitsByModel,
+          slots: [...slots.values()],
+        };
+        if (!calibration.models.length) {
+          reason = 'The calibration run has no checker answers on disk.';
+          calibration = null;
+        }
+      }
+    } catch (err) {
+      reason = `The calibration run could not be read: ${(err as Error).message}`;
+    }
+  }
+
+  const value: ExtractExploreResponse = {
+    kind: 'extract',
+    benchId: report.benchId ?? benchId,
+    createdAt: typeof report.createdAt === 'string' ? report.createdAt : null,
+    target: report.target,
+    decision: state.decision,
+    baselineModel: typeof state.baseline === 'string' ? state.baseline : null,
+    report,
+    calibration,
+    calibrationMissingReason: calibration ? null : (reason ?? 'The calibration run is not available.'),
+  };
+  extractExploreCache.set(dir, { key, value });
   return value;
 }
 
@@ -1270,7 +1403,7 @@ function countsOf(s: ReviewSummary, rows: number): ReviewCounts {
   return { rows, flagged: s.flagged, reviewed: s.reviewed, remaining: s.remaining, reviewedOther: s.reviewedOther, overridden: s.overridden };
 }
 
-const accuracyOf = (s: ReviewSummary): ReviewAccuracy | null => (s.accuracy?.of ? s.accuracy : null);
+const accuracyOf = (s: { accuracy?: ReviewAccuracy | undefined }): ReviewAccuracy | null => (s.accuracy?.of ? s.accuracy : null);
 
 /** A run whose outcomes are known, with the task loaded; otherwise a 400 that says why. */
 async function reviewableRun(runsRoot: string, runId: string): Promise<{ run: LoadedRun & { task: TaskDefinition }; review: FoldedRun }> {
@@ -1279,8 +1412,157 @@ async function reviewableRun(runsRoot: string, runId: string): Promise<{ run: Lo
   const run = await loadRunCached(dir);
   const review = reviewOf(run);
   if (!run.task || !review) throw new BadRequestError(`This run cannot be reviewed: ${run.problem ?? 'its outcomes are unknown'}`);
-  if (run.task.extract) throw new BadRequestError('Review is not available for extraction runs yet (flagged fields are in enriched-fields.csv).');
   return { run: run as LoadedRun & { task: TaskDefinition }, review };
+}
+
+// ---------------------------------------------------------------- extraction runs: review per field
+
+interface FieldReview {
+  key: string;
+  folded: FoldedField[];
+  /** Round-1 outcomes (the "simple" pipeline), by `rowId\0field`. */
+  round1: Map<string, FieldOutcome>;
+  summary: FieldReviewSummary;
+}
+
+const fieldReviewCache = new Map<string, FieldReview>();
+const slotKey = (rowId: string, field: string) => `${rowId}\u0000${field}`;
+
+/**
+ * Field outcomes of an extraction run with the reviewer's decisions folded in. Thresholds are the ones the bench
+ * report used (see effectiveThresholds). Cached by file stats.
+ */
+function fieldReviewOf(run: LoadedRun & { task: TaskDefinition }): FieldReview {
+  const thresholds = effectiveThresholds(run.dir, run.manifest);
+  const key = `${run.key}|${statKey(overridesPath(run.dir))}|${JSON.stringify(thresholds)}`;
+  const hit = fieldReviewCache.get(run.dir);
+  if (hit && hit.key === key) return hit;
+  const ctx = { task: run.task, rows: run.records, thresholds, mode: run.manifest.mode };
+  const full = computeFieldOutcomes(run.st, ctx);
+  const round1 = new Map(computeFieldOutcomes(run.st, ctx, { maxRound: 1 }).map((o) => [slotKey(o.rowId, o.field), o]));
+  const folded = foldFieldOverrides(full, readOverrides(run.dir));
+  const result: FieldReview = { key, folded, round1, summary: fieldReviewSummary(folded, run.task, labelReader(run.manifest, run.records)) };
+  fieldReviewCache.set(run.dir, result);
+  return result;
+}
+
+const documentText = (task: TaskDefinition, row: RowRecord): string => {
+  const doc = (task.state(row.data) as Record<string, unknown>).document;
+  return typeof doc === 'string' ? doc : (row.data.text ?? '');
+};
+
+function goldValues(label: string, field: string): string[] {
+  try {
+    const g = (JSON.parse(label) as Record<string, unknown>)[field];
+    return Array.isArray(g) ? g.filter((x): x is string => typeof x === 'string' && x.trim() !== '') : [];
+  } catch {
+    return [];
+  }
+}
+
+function fieldRound(run: LoadedRun, row: RowRecord, o: Pick<FieldOutcome, 'rowId' | 'field' | 'value' | 'verdict' | 'model'>, round: 1 | 2): FieldRoundInfo {
+  const text = documentText(run.task!, row);
+  const v = run.st.verify.get(verifyKey(o.rowId, round));
+  const a = v ? asChoice(v.answers[o.field]) : undefined;
+  const probabilities =
+    v && o.verdict !== 'writer_failed' && o.verdict !== 'invalid_output' && o.verdict !== 'baseline'
+      ? {
+          supported: a?.probabilities.supported ?? 0,
+          unsupported: a?.probabilities.unsupported ?? 0,
+          cannot_tell: a?.probabilities[CANNOT_TELL] ?? 0,
+        }
+      : null;
+  return { round, model: o.model, value: o.value, verdict: o.verdict, probabilities, spans: findSpans(text, o.value) };
+}
+
+function fieldItem(run: LoadedRun & { task: TaskDefinition }, f: FoldedField, review: FieldReview, rows: Map<string, RowRecord>): FieldItem {
+  const row = rows.get(f.rowId)!;
+  const ex = run.task.extract!;
+  const label = run.manifest.labelColumn ? (row.data[run.manifest.labelColumn] ?? '') : '';
+  const labeled = !!label.trim();
+  const r1 = review.round1.get(slotKey(f.rowId, f.field))!;
+  const round2 = f.round === 2 && f.verdict !== '' && f.pipelineStatus !== 'pending';
+  const valueCorrect = labeled ? !isUnusable(f) && ex.isCorrect(f.field, f.value, label) : null;
+  const d = f.review;
+  return {
+    docId: f.rowId,
+    field: f.field,
+    status: f.status,
+    pipelineStatus: f.pipelineStatus,
+    value: f.value,
+    finalValue: f.finalValue,
+    round: f.round,
+    verdict: f.verdict,
+    acceptable: f.pipelineStatus !== 'pending' && !isUnusable(f),
+    round1: r1.verdict === '' ? null : fieldRound(run, row, r1, 1),
+    round2: round2 ? fieldRound(run, row, f, 2) : null,
+    expected: labeled ? goldValues(label, f.field) : null,
+    valueCorrect,
+    finalCorrect: labeled ? (d ? ex.isCorrect(f.field, d.answer, label) : valueCorrect) : null,
+    review: d
+      ? { action: d.action, value: d.answer, previous: d.previous, note: d.note ?? null, at: d.at, pipelineStatus: d.pipelineStatus ?? null, stale: d.previous !== f.value }
+      : null,
+  };
+}
+
+function extractCountsOf(s: FieldReviewSummary, documents: number): ExtractReviewCounts {
+  return { fields: s.fields, documents, flagged: s.flagged, reviewed: s.reviewed, remaining: s.remaining, reviewedOther: s.reviewedOther, overridden: s.overridden };
+}
+
+function getExtractReview(run: LoadedRun & { task: TaskDefinition }, filter: ReviewFilter, o: ApiOptions): ExtractReviewResponse {
+  const review = fieldReviewOf(run);
+  const rows = new Map(run.records.map((r) => [r.id, r]));
+  const keep = (f: FoldedField) => (filter === 'all' ? true : filter === 'flagged' ? f.pipelineStatus === 'flagged' : f.review !== null);
+  const items = review.folded.filter(keep).map((f) => fieldItem(run, f, review, rows));
+  const documents: Record<string, string> = {};
+  for (const it of items) documents[it.docId] ??= documentText(run.task, rows.get(it.docId)!);
+  const { status } = runStatus(run, o);
+  return {
+    kind: 'extract',
+    runId: run.manifest.runId,
+    status,
+    running: status === 'running',
+    filter,
+    fields: [...run.task.extract!.fields],
+    labelColumn: run.manifest.labelColumn ?? null,
+    maxAnswerChars: MAX_ANSWER_CHARS,
+    maxNoteChars: MAX_NOTE_CHARS,
+    counts: extractCountsOf(review.summary, run.records.length),
+    accuracy: accuracyOf(review.summary),
+    documents,
+    items,
+  };
+}
+
+function postExtractOverride(run: LoadedRun & { task: TaskDefinition }, body: unknown, o: ApiOptions): ExtractOverrideResponse {
+  const parsed = decisionInputSchema.safeParse(body);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    throw new BadRequestError(`Invalid decision: ${issue ? `${issue.path.join('.') || 'body'}: ${issue.message}` : 'bad body'}`);
+  }
+  const { field, rowId } = parsed.data;
+  const slot = field === undefined ? undefined : fieldReviewOf(run).folded.find((f) => f.rowId === rowId && f.field === field);
+  let record;
+  try {
+    record = makeFieldOverride(
+      parsed.data,
+      slot ? { status: slot.pipelineStatus, value: slot.value, unusable: isUnusable(slot) } : undefined,
+      run.task,
+      new Date(now(o)),
+    );
+  } catch (err) {
+    if (err instanceof OverrideError) throw err.code === 'unknown_row' ? new NotFoundError(err.message) : new BadRequestError(err.message);
+    throw err;
+  }
+  appendOverride(run.dir, record);
+  const after = fieldReviewOf(run); // overrides.jsonl changed size, so this re-reads it
+  const f = after.folded.find((x) => x.rowId === record.rowId && x.field === field)!;
+  return {
+    kind: 'extract',
+    item: fieldItem(run, f, after, new Map(run.records.map((r) => [r.id, r]))),
+    counts: extractCountsOf(after.summary, run.records.length),
+    accuracy: accuracyOf(after.summary),
+  };
 }
 
 // ---------------------------------------------------------------- GET /api/runs/:id/review
@@ -1288,6 +1570,7 @@ async function reviewableRun(runsRoot: string, runId: string): Promise<{ run: Lo
 export async function getReview(runsRoot: string, runId: string, filterParam: string | null, o: ApiOptions = {}): Promise<ReviewResponse> {
   const filter = parseReviewFilter(filterParam);
   const { run, review } = await reviewableRun(runsRoot, runId);
+  if (run.task.extract) return getExtractReview(run, filter, o);
   const { status } = runStatus(run, o);
   const inputColumns = reviewInputColumns(run.task, run.manifest);
   const keep = (f: FoldedOutcome) => (filter === 'all' ? true : filter === 'flagged' ? f.pipelineStatus === 'flagged' : f.review !== null);
@@ -1317,6 +1600,7 @@ export async function getReview(runsRoot: string, runId: string, filterParam: st
  */
 export async function postOverride(runsRoot: string, runId: string, body: unknown, o: ApiOptions = {}): Promise<OverrideResponse> {
   const { run } = await reviewableRun(runsRoot, runId);
+  if (run.task.extract) return postExtractOverride(run, body, o);
   const parsed = decisionInputSchema.safeParse(body);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
@@ -1345,6 +1629,10 @@ export async function postOverride(runsRoot: string, runId: string, body: unknow
 /** Same as `twopass report --write`: rewrites enriched.csv and review.csv (and nothing else). */
 export async function postOutputs(runsRoot: string, runId: string, o: ApiOptions = {}): Promise<OutputsResponse> {
   const { run } = await reviewableRun(runsRoot, runId);
+  if (run.task.extract) {
+    const fr = await rewriteFieldOutputs(run.dir);
+    return { written: ['enriched-fields.csv'], at: new Date(now(o)).toISOString(), counts: extractCountsOf(fr.summary, fr.records.length) };
+  }
   const report = await rewriteOutputs(run.dir);
   const summary = reviewSummary(report.folded, report.manifest.labelColumn, documentCorrectness(report.task));
   return { written: ['enriched.csv', 'review.csv'], at: new Date(now(o)).toISOString(), counts: countsOf(summary, report.folded.length) };

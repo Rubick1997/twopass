@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runVrduBench } from '../src/bench-vrdu.ts';
-import { BadRequestError, getBench, getBenchExplore, getBenchReport, getReview, getRun, listBenches, listRuns, NotFoundError, postOutputs } from '../src/ui/api.ts';
+import { getBench, getBenchExplore, getBenchReport, getReview, getRun, listBenches, listRuns, postOutputs } from '../src/ui/api.ts';
 import { installFakeApi, setup } from './vrdu-bench-helpers.ts';
 
 describe('the UI API on an extract bench', () => {
@@ -41,12 +41,11 @@ describe('the UI API on an extract bench', () => {
     }
   });
 
-  it('says why the results explorer and the review queue are not available', async () => {
+  it('serves the explorer and the review queue (see test/ui-extract-review.test.ts)', async () => {
     const { runsRoot, state } = await bench();
-    await expect(getBenchExplore(runsRoot, state.benchId)).rejects.toBeInstanceOf(NotFoundError);
-    await expect(getBenchExplore(runsRoot, state.benchId)).rejects.toThrow(/extraction bench/);
-    await expect(getReview(runsRoot, state.testRuns.normal, null)).rejects.toBeInstanceOf(BadRequestError);
-    await expect(postOutputs(runsRoot, state.testRuns.normal)).rejects.toThrow(/extraction runs/);
+    expect(await getBenchExplore(runsRoot, state.benchId)).toMatchObject({ kind: 'extract', benchId: state.benchId });
+    expect(await getReview(runsRoot, state.testRuns.normal, null)).toMatchObject({ kind: 'extract', runId: state.testRuns.normal });
+    expect((await postOutputs(runsRoot, state.testRuns.normal)).written).toEqual(['enriched-fields.csv']);
   });
 
   it('a stopped extract bench offers the vrdu resume command', async () => {

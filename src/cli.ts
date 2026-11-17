@@ -8,6 +8,7 @@ import { NEVER, type StageCalibration } from './calibrate.ts';
 import { documentCorrectness } from './extract/outcomes.ts';
 import { readOverrides } from './overrides.ts';
 import { BatchFailedError, TruncatedOutputError } from './pipeline.ts';
+import { fieldReviewLine, loadFieldReport, writeFieldOutputs } from './extract/review.ts';
 import { costCheckLine, loadReport, reviewLine, summarize, summaryLine, writeOutputs } from './report.ts';
 import { runDir } from './run.ts';
 import {
@@ -46,6 +47,7 @@ const USAGE = `twopass: batch LLM work, checked row by row by a decision model
   twopass report <runId> [--label <column>] [--write]     no model calls, no cost
       summary from the ledger plus the reviewer's decisions (overrides.jsonl)
       --write                rewrite enriched.csv and review.csv from them
+                             (extraction runs: enriched-fields.csv, with a column per decision)
   twopass calibrate <runId> --models jev,clef,luna [--target 0.95] [--max-usd <n>]
   twopass bench banking77 --max-usd <n> [--configs jev,clef,luna,jev+clef]
       [--baseline <model>] [--calibration-size 1000] [--test-size <n>] [--baseline-size <n>]
@@ -198,7 +200,18 @@ async function main(argv: string[]): Promise<number> {
       if (!target) throw new UsageError('report needs <runId>');
       const dir = runDir(runsRoot, target);
       const { manifest, task, st, outcomes, overrides, folded } = await loadReport(dir);
-      printSummary(summarize(outcomes, st, values.label ?? manifest.labelColumn, overrides, documentCorrectness(task)));
+      printSummary(summarize(outcomes, st, values.label ?? manifest.labelColumn, overrides, documentCorrectness(task)), !!task.extract);
+      if (task.extract) {
+        // Extraction runs are reviewed per field: progress and accuracy are over field slots.
+        const fields = await loadFieldReport(dir);
+        const line = fieldReviewLine(fields.summary);
+        if (line) console.log(`  review: ${line}`);
+        if (values.write) {
+          writeFieldOutputs(dir, fields);
+          console.log(`wrote ${join(dir, 'enriched-fields.csv')}`);
+        }
+        return 0;
+      }
       if (values.write) {
         writeOutputs(dir, folded, manifest.inputColumns);
         console.log(`wrote ${join(dir, 'enriched.csv')}, ${join(dir, 'review.csv')}`);
@@ -371,9 +384,9 @@ async function execute(
   }
 }
 
-function printSummary(s: ReturnType<typeof summarize>) {
+function printSummary(s: ReturnType<typeof summarize>, extract = false) {
   console.log(`\n${summaryLine(s)}`);
-  const review = reviewLine(s.review);
+  const review = extract ? null : reviewLine(s.review);
   if (review) console.log(`  review: ${review}`);
   for (const r of s.rounds) {
     console.log(`  round ${r.round}: ${r.batches} batch(es), median ${r.medianMinutes.toFixed(1)} min, worst ${r.worstMinutes.toFixed(1)} min`);
