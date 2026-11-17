@@ -4,7 +4,7 @@ import { stringify } from 'csv-stringify/sync';
 import { parseLedger, replay, type RunState } from './ledger.ts';
 import { foldOverrides, readOverrides, type FoldedOutcome, type OverrideRecord } from './overrides.ts';
 import { computeOutcomes, type RowOutcome } from './pipeline.ts';
-import { loadRun, type RunManifest } from './run.ts';
+import { effectiveThresholds, loadRun, type RunManifest } from './run.ts';
 import { median } from './stats.ts';
 import { loadTask, type TaskDefinition } from './task.ts';
 
@@ -253,7 +253,7 @@ export async function loadReport(dir: string): Promise<RunReport> {
   // Read only: opening a Ledger would repair (truncate) a torn tail, which a live run may be writing.
   const ledgerPath = join(dir, 'ledger.jsonl');
   const st = replay(existsSync(ledgerPath) ? parseLedger(readFileSync(ledgerPath, 'utf8'), ledgerPath) : []);
-  const outcomes = computeOutcomes(st, { task, rows: records, thresholds: manifest.thresholds, mode: manifest.mode });
+  const outcomes = computeOutcomes(st, { task, rows: records, thresholds: effectiveThresholds(dir, manifest), mode: manifest.mode });
   const overrides = readOverrides(dir);
   return { manifest, task, st, outcomes, overrides, folded: foldOverrides(outcomes, overrides) };
 }

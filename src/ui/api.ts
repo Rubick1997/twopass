@@ -41,7 +41,7 @@ import type { BenchReport } from '../bench.ts';
 import { noCallModel, readCalibration } from '../runner.ts';
 import type { VrduBenchState } from '../bench-vrdu.ts';
 import type { ScoreRecord } from '../score.ts';
-import { loadRun, type RunManifest } from '../run.ts';
+import { effectiveThresholdsInfo, loadRun, type RunManifest } from '../run.ts';
 import { scoreRun } from '../score.ts';
 import { batchDurationMs, median, spendByStage, type StageSpend } from '../stats.ts';
 import { bucketsFromOpenRouter } from '../cost/usage.ts';
@@ -160,8 +160,19 @@ function statKey(path: string): string {
   }
 }
 
+function effectiveThresholdsKey(dir: string): string {
+  const manifestPath = join(dir, 'manifest.json');
+  if (!existsSync(manifestPath)) return '';
+  try {
+    return JSON.stringify(effectiveThresholdsInfo(dir, JSON.parse(readFileSync(manifestPath, 'utf8')) as RunManifest).thresholds);
+  } catch {
+    return '';
+  }
+}
+
 async function loadRunCached(dir: string): Promise<LoadedRun> {
-  const key = ['manifest.json', 'ledger.jsonl', 'rows.jsonl'].map((f) => statKey(join(dir, f))).join('|');
+  // A bench refit changes the thresholds without touching the run's files, so they are part of the key.
+  const key = [...['manifest.json', 'ledger.jsonl', 'rows.jsonl'].map((f) => statKey(join(dir, f))), effectiveThresholdsKey(dir)].join('|');
   const hit = runCache.get(dir);
   if (hit && hit.key === key) return hit;
 
@@ -183,7 +194,7 @@ async function loadRunCached(dir: string): Promise<LoadedRun> {
   }
   const outcomes =
     task && !problem
-      ? computeOutcomes(st, { task, rows: records, thresholds: manifest.thresholds, mode: manifest.mode })
+      ? computeOutcomes(st, { task, rows: records, thresholds: effectiveThresholds(dir, manifest), mode: manifest.mode })
       : null;
   const loaded: LoadedRun = {
     key,
@@ -338,7 +349,8 @@ export async function getRun(runsRoot: string, runId: string, o: ApiOptions = {}
   const item = toListItem(run, o, bench);
   const { lock } = runStatus(run, o);
   const m = run.manifest;
-  const stages = run.task ? stageProgress(run.st, run.task, m, run.records) : [];
+  const eff = effectiveThresholdsInfo(run.dir, m);
+  const stages = run.task ? stageProgress(run.st, run.task, { ...m, thresholds: eff.thresholds }, run.records) : [];
   const activeStage = item.status === 'finished' ? null : (stages.find((s) => s.state === 'active')?.key ?? null);
   const all = await loadAllRuns(runsRoot);
   const medians = batchMedians(all.map((r) => r.st));
@@ -351,8 +363,8 @@ export async function getRun(runsRoot: string, runId: string, o: ApiOptions = {}
       taskPath: m.taskPath,
       inputPath: m.inputPath,
       labelColumn: m.labelColumn ?? null,
-      thresholds: m.thresholds,
-      thresholdsSource: m.thresholdsSource,
+      thresholds: eff.thresholds,
+      thresholdsSource: eff.source,
       prices: m.prices,
       servedModels: m.servedModels ?? [],
     },

@@ -1,11 +1,11 @@
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { stringify } from 'csv-stringify/sync';
 import { parseLedger, replay, type RunState } from '../ledger.ts';
 import { activeFieldDecisions, readOverrides, type FieldDecision, type OverrideRecord } from '../overrides.ts';
 import type { RowRecord } from '../pipeline.ts';
 import { escapeCell, type Accuracy } from '../report.ts';
-import { loadRun, type RunManifest } from '../run.ts';
+import { effectiveThresholds, loadRun, type RunManifest } from '../run.ts';
 import { loadTask, type TaskDefinition, type Thresholds } from '../task.ts';
 import { computeFieldOutcomes, type FieldOutcome } from './outcomes.ts';
 import { FIELD_CSV_COLUMNS, fieldCsvRecords } from './report.ts';
@@ -39,25 +39,7 @@ export function findSpans(text: string, value: string | null, cap = MAX_SPANS): 
 
 // ---------------------------------------------------------------- thresholds
 
-/**
- * The thresholds the bench report was built with for this run. A bench that refitted t2 after the first test read
- * keeps them in bench.json and leaves the run's manifest alone, so the review must take them from there or it
- * would not list the fields the report counts. Falls back to the manifest's.
- */
-export function effectiveThresholds(runDir: string, manifest: Pick<RunManifest, 'runId' | 'thresholds'>): Thresholds {
-  const root = dirname(runDir);
-  try {
-    for (const name of readdirSync(root)) {
-      const path = join(root, name, 'bench.json');
-      if (!name.startsWith('bench-') || !existsSync(path)) continue;
-      const state = JSON.parse(readFileSync(path, 'utf8')) as { kind?: string; testRuns?: Record<string, string>; refit?: { thresholds?: Thresholds } };
-      if (state.kind === 'extract' && state.testRuns?.normal === manifest.runId && state.refit?.thresholds) return state.refit.thresholds;
-    }
-  } catch {
-    // an unreadable folder or bench.json: use the manifest's
-  }
-  return manifest.thresholds;
-}
+export { effectiveThresholds };
 
 // ---------------------------------------------------------------- folding
 
