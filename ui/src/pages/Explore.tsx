@@ -68,7 +68,7 @@ export function ExplorePage({ id, tab }: { id: string; tab?: string }) {
         <a href="#/">All runs</a> <span aria-hidden="true">›</span> <a href={benchHref(id)}>{id}</a> <span aria-hidden="true">›</span>{' '}
         <span aria-current="page">Explore</span>
       </nav>
-      <h1>What happens to your rows</h1>
+      <h1>{d?.kind === 'extract' ? 'What happens to your fields' : 'What happens to your rows'}</h1>
       <p className="muted lede">
         A benchmark run on {date && !Number.isNaN(date.getTime()) ? date.toLocaleDateString([], { year: 'numeric', month: 'long', day: 'numeric' }) : 'an unknown date'}{' '}
         <span className="mono-id">({id})</span>. It tells you which answers you can trust without checking, and how many you will have to check yourself.

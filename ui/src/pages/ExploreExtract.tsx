@@ -52,7 +52,7 @@ function TryItInner({ d }: { d: ExtractExploreResponse }) {
   const cal = d.calibration!;
   const [targetPct, setTargetPct] = useState(Math.min(99, Math.max(80, Math.round(d.target * 100))));
   const [checker, setChecker] = useState(cal.models.includes(d.decision) ? d.decision : cal.models[0]!);
-  const [pipeline, setPipeline] = useState<Pipeline>('full');
+  const [pipeline, setPipeline] = useState<Pipeline>('simple');
   const r = useMemo(() => replayExtract(cal.slots, checker, targetPct / 100, pipeline), [cal.slots, checker, targetPct, pipeline]);
   const counts = waffleCounts(r);
   const benchFit = cal.fitsByModel[checker];
@@ -401,7 +401,7 @@ function Method({ d }: { d: ExtractExploreResponse }) {
         <h2 id="x-split-h">Two splits of documents</h2>
         <p>
           Thresholds were fitted on {n0(r.calibration.documents)} calibration documents (run <code>{r.calibration.runId}</code>), one point per field. The results were measured on{' '}
-          {n0(r.documents)} different test documents ({n0(r.fields)} fields). {r.thresholdsSource}.
+          {n0(r.documents)} different test documents ({n0(r.fields)} fields).{r.refit ? ' The round-2 threshold was refitted after the first test read; see the Results tab.' : ''}
         </p>
         <Why label="What is ECE?">
           Expected calibration error: fields are sorted into 10 equal-width bins by the checker’s p(supported); ECE is the average gap between the mean p and the share of values that

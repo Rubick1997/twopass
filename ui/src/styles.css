@@ -1578,12 +1578,14 @@ tr.baseline-row td {
 :root {
   --hl1: #fde68a;
   --hl2: #a5d0ff;
+  --hl12: #b7e4c0;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     --hl1: #6b5410;
     --hl2: #1f4f86;
+    --hl12: #1f5a3a;
   }
 }
 
@@ -1620,7 +1622,8 @@ mark.hl-r2 {
 }
 
 mark.hl-both {
-  background: linear-gradient(90deg, var(--hl1) 50%, var(--hl2) 50%);
+  /* A colour of its own: a half-and-half gradient read as a rendering glitch on long values. */
+  background: var(--hl12);
   border-bottom: 2px double var(--text);
 }
 
