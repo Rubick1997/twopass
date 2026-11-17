@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
-import type { ExploreCaching, ExploreConfigResult, ExploreCostPer1k, ExploreReliability, ExploreResponse } from '../../../src/ui/api-types.ts';
+import type { ExploreCaching, ExtractExploreResponse, ExploreConfigResult, ExploreCostPer1k, ExploreReliability, ExploreResponse } from '../../../src/ui/api-types.ts';
 import {
   bestConfig,
   cardStats,
@@ -22,7 +22,9 @@ import {
   type Thresholds,
 } from '../explore.ts';
 import { formatPct, formatUsd, thresholdText } from '../format.ts';
-import { benchHref, exploreHref } from '../hooks.ts';
+import { benchHref } from '../hooks.ts';
+import { ExploreExtract } from './ExploreExtract.tsx';
+import { isTab, ReliabilityChart, Square, TabbedPanels, Tile, Waffle, Why, type TabKey } from './explore-parts.tsx';
 
 // The results explorer, for people deciding whether to trust a model with a spreadsheet of repetitive work.
 // Three tabs: "Try it" (one accuracy slider, refitted live with fitThreshold, and a 100-row waffle), "Results"
@@ -40,22 +42,14 @@ const STEP: Record<(typeof STAGES)[number], string> = {
 };
 const MAX_LINES = 5;
 
-const TABS = [
-  { key: 'try', label: 'Try it' },
-  { key: 'results', label: 'Results' },
-  { key: 'method', label: 'How it was tested' },
-] as const;
-type TabKey = (typeof TABS)[number]['key'];
-const isTab = (x: string | undefined): x is TabKey => TABS.some((t) => t.key === x);
-
 export function ExplorePage({ id, tab }: { id: string; tab?: string }) {
-  const [state, setState] = useState<{ data: ExploreResponse | null; error: string | null }>({ data: null, error: null });
+  const [state, setState] = useState<{ data: ExploreResponse | ExtractExploreResponse | null; error: string | null }>({ data: null, error: null });
   useEffect(() => {
     let live = true;
     setState({ data: null, error: null });
     fetch(`/api/benches/${encodeURIComponent(id)}/explore`, { headers: { Accept: 'application/json' } })
       .then(async (res) => {
-        const body = (await res.json()) as ExploreResponse & { error?: string };
+        const body = (await res.json()) as (ExploreResponse | ExtractExploreResponse) & { error?: string };
         if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
         return body;
       })
@@ -81,7 +75,8 @@ export function ExplorePage({ id, tab }: { id: string; tab?: string }) {
       </p>
       {state.error && <p className="note note-error">{state.error}</p>}
       {!d && !state.error && <p className="muted">Loading…</p>}
-      {d && <Explorer d={d} tab={isTab(tab) ? tab : 'try'} />}
+      {d && d.kind === 'extract' && <ExploreExtract d={d} tab={isTab(tab) ? tab : 'try'} />}
+      {d && d.kind !== 'extract' && <Explorer d={d} tab={isTab(tab) ? tab : 'try'} />}
     </>
   );
 }
@@ -89,65 +84,12 @@ export function ExplorePage({ id, tab }: { id: string; tab?: string }) {
 // ---------------------------------------------------------------- tabs
 
 function Explorer({ d, tab }: { d: ExploreResponse; tab: TabKey }) {
-  const refs = useRef<Array<HTMLButtonElement | null>>([]);
-  const go = (key: TabKey) => {
-    window.location.hash = exploreHref(d.benchId, key);
-  };
-  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    const i = TABS.findIndex((t) => t.key === tab);
-    let next = i;
-    if (e.key === 'ArrowRight') next = (i + 1) % TABS.length;
-    else if (e.key === 'ArrowLeft') next = (i - 1 + TABS.length) % TABS.length;
-    else if (e.key === 'Home') next = 0;
-    else if (e.key === 'End') next = TABS.length - 1;
-    else return;
-    e.preventDefault();
-    const key = TABS[next]!.key;
-    go(key);
-    refs.current[next]?.focus();
-  };
   return (
-    <>
-      <div className="tabs" role="tablist" aria-label="Sections" onKeyDown={onKey}>
-        {TABS.map((t, i) => (
-          <button
-            key={t.key}
-            ref={(el) => {
-              refs.current[i] = el;
-            }}
-            type="button"
-            role="tab"
-            id={`tab-${t.key}`}
-            aria-selected={t.key === tab}
-            aria-controls={`panel-${t.key}`}
-            tabIndex={t.key === tab ? 0 : -1}
-            className="tab"
-            onClick={() => go(t.key)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-      <div role="tabpanel" id="panel-try" aria-labelledby="tab-try" hidden={tab !== 'try'} className="panel">
-        <TryIt d={d} />
-      </div>
-      <div role="tabpanel" id="panel-results" aria-labelledby="tab-results" hidden={tab !== 'results'} className="panel">
-        <Results d={d} />
-      </div>
-      <div role="tabpanel" id="panel-method" aria-labelledby="tab-method" hidden={tab !== 'method'} className="panel">
-        <Method d={d} />
-      </div>
-    </>
-  );
-}
-
-/** A one-sentence explanation behind a disclosure, never a hover tooltip. */
-function Why({ children, label = 'What does this mean?' }: { children: ReactNode; label?: string }) {
-  return (
-    <details className="why">
-      <summary>{label}</summary>
-      <p>{children}</p>
-    </details>
+    <TabbedPanels
+      benchId={d.benchId}
+      tab={tab}
+      panels={{ try: <TryIt d={d} />, results: <Results d={d} />, method: <Method d={d} /> }}
+    />
   );
 }
 
@@ -412,16 +354,6 @@ function TryItInner({ d }: { d: ExploreResponse }) {
   );
 }
 
-function Tile({ label, value, why }: { label: string; value: string; why: string }) {
-  return (
-    <div className="tile">
-      <div className="tile-label">{label}</div>
-      <div className="tile-value">{value}</div>
-      <Why>{why}</Why>
-    </div>
-  );
-}
-
 function Slider({ id, label, value, onChange }: { id: string; label: string; value: number; onChange: (v: number) => void }) {
   return (
     <div className="slider">
@@ -446,44 +378,6 @@ function Slider({ id, label, value, onChange }: { id: string; label: string; val
 }
 
 // ---------------------------------------------------------------- the waffle
-
-type SquareState = 'right' | 'wrong' | 'check';
-
-/** One square: filled for right, filled with a cross for wrong, outlined for "check" (shape as well as colour). */
-function SquareMark({ x, y, s, state }: { x: number; y: number; s: number; state: SquareState }) {
-  const r = s * 0.14;
-  return (
-    <g className={`sq sq-${state}`}>
-      <rect x={x} y={y} width={s} height={s} rx={r} />
-      {state === 'wrong' && (
-        <path d={`M${x + s * 0.28} ${y + s * 0.28}L${x + s * 0.72} ${y + s * 0.72}M${x + s * 0.72} ${y + s * 0.28}L${x + s * 0.28} ${y + s * 0.72}`} className="cross" />
-      )}
-    </g>
-  );
-}
-
-function Square({ state }: { state: SquareState }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 10 10" aria-hidden="true" className="waffle">
-      <SquareMark x={0.5} y={0.5} s={9} state={state} />
-    </svg>
-  );
-}
-
-function Waffle({ counts, sentenceId }: { counts: { right: number; wrong: number; check: number }; sentenceId: string }) {
-  const cells: SquareState[] = [
-    ...Array.from({ length: counts.right }, () => 'right' as const),
-    ...Array.from({ length: counts.wrong }, () => 'wrong' as const),
-    ...Array.from({ length: counts.check }, () => 'check' as const),
-  ];
-  return (
-    <svg viewBox="0 0 100 100" className="waffle waffle-main" role="img" aria-labelledby={sentenceId}>
-      {cells.map((state, i) => (
-        <SquareMark key={i} x={(i % 10) * 10 + 1} y={Math.floor(i / 10) * 10 + 1} s={8} state={state} />
-      ))}
-    </svg>
-  );
-}
 
 // ---------------------------------------------------------------- 2. Results
 
@@ -929,87 +823,16 @@ function Reliability({ items, configs }: { items: ExploreReliability[]; configs:
       </ul>
       <div className="rel-grid">
         {items.map((r) => (
-          <ReliabilityChart key={`${r.config}/${r.stage}`} r={r} setup={friendlyConfig(configs.find((c) => c.name === r.config) ?? { name: r.config, triage: null, verify: null })} />
+          <ReliabilityChart
+            key={`${r.config}/${r.stage}`}
+            r={r}
+            title={`${friendlyConfig(configs.find((c) => c.name === r.config) ?? { name: r.config, triage: null, verify: null })} setup · ${STEP[r.stage]}`}
+            subtitle={`${friendlyModel(r.model)} deciding`}
+            tooltip={`${r.config} · ${r.stage} (${r.model})`}
+          />
         ))}
       </div>
     </>
   );
 }
 
-function ReliabilityChart({ r, setup }: { r: ExploreReliability; setup: string }) {
-  const S = 180;
-  const m = 28;
-  const P = S - m - 8;
-  const X = (v: number) => m + v * P;
-  const Y = (v: number) => 8 + (1 - v) * P;
-  const raw = r.raw.filter((b) => b.n > 0);
-  const cal = r.calibrated.filter((b) => b.n > 0);
-  const title = `${setup} setup · ${STEP[r.stage]}`;
-  const caption = `ECE ${r.eceRaw.toFixed(3)} → ${r.eceCalibrated.toFixed(3)}, ${r.n.toLocaleString('en-US')} rows`;
-  return (
-    <figure className="rel">
-      <figcaption>
-        <strong title={`${r.config} · ${r.stage} (${r.model})`}>{title}</strong>
-        <br />
-        <span className="muted small">
-          {friendlyModel(r.model)} deciding · {caption}
-        </span>
-      </figcaption>
-      <svg viewBox={`0 0 ${S} ${S}`} role="img" aria-label={`Reliability, ${title}. ${caption}. Table follows.`} className="chart">
-        <rect x={m} y={8} width={P} height={P} className="frame" />
-        <line x1={X(0)} y1={Y(0)} x2={X(1)} y2={Y(1)} className="diag" />
-        {[0, 0.5, 1].map((v) => (
-          <g key={v}>
-            <text x={X(v)} y={S - 12} textAnchor="middle" className="ax-s">
-              {v}
-            </text>
-            <text x={m - 4} y={Y(v) + 3} textAnchor="end" className="ax-s">
-              {v}
-            </text>
-          </g>
-        ))}
-        <path d={bins(raw, X, Y)} className="rel-line raw" />
-        <path d={bins(cal, X, Y)} className="rel-line cal" />
-        {raw.map((b) => (
-          <circle key={`r${b.lo}`} cx={X(b.meanP)} cy={Y(b.accuracy)} r={4} className="dot-raw">
-            <title>{`raw ${b.lo.toFixed(1)}–${b.hi.toFixed(1)}: said ${b.meanP.toFixed(2)}, right ${b.accuracy.toFixed(2)}, ${b.n} rows`}</title>
-          </circle>
-        ))}
-        {cal.map((b) => (
-          <circle key={`c${b.lo}`} cx={X(b.meanP)} cy={Y(b.accuracy)} r={4} className="dot-cal">
-            <title>{`calibrated ${b.lo.toFixed(1)}–${b.hi.toFixed(1)}: said ${b.meanP.toFixed(2)}, right ${b.accuracy.toFixed(2)}, ${b.n} rows`}</title>
-          </circle>
-        ))}
-      </svg>
-      <div className="sr-only">
-        <table>
-          <caption>{`${title}: ${caption}`}</caption>
-          <thead>
-            <tr>
-              <th scope="col">Version</th>
-              <th scope="col">Bin</th>
-              <th scope="col">Rows</th>
-              <th scope="col">Mean probability</th>
-              <th scope="col">Share right</th>
-            </tr>
-          </thead>
-          <tbody>
-            {[...raw.map((b) => ['raw', b] as const), ...cal.map((b) => ['calibrated', b] as const)].map(([v, b]) => (
-              <tr key={`${v}${b.lo}`}>
-                <th scope="row">{v}</th>
-                <td>{`${b.lo.toFixed(1)} to ${b.hi.toFixed(1)}`}</td>
-                <td>{b.n}</td>
-                <td>{b.meanP.toFixed(2)}</td>
-                <td>{b.accuracy.toFixed(2)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </figure>
-  );
-}
-
-function bins(bs: Array<{ meanP: number; accuracy: number }>, X: (v: number) => number, Y: (v: number) => number): string {
-  return bs.map((b, i) => `${i ? 'L' : 'M'}${X(b.meanP).toFixed(1)} ${Y(b.accuracy).toFixed(1)}`).join('');
-}
