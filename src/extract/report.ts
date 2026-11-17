@@ -1,8 +1,10 @@
+import { applyIsotonic, ece, reliabilityBins, type Bin, type IsoStep } from '../calibrate.ts';
 import { asChoice, type Answer } from '../decide/model.ts';
 import type { VrduField } from '../datasets/vrdu.ts';
 import { customId, type RunState } from '../ledger.ts';
 import type { RowRecord } from '../pipeline.ts';
 import { escapeCell, roundTimings, type RoundTiming } from '../report.ts';
+import { verifyPoint } from '../score.ts';
 import { spendByStage } from '../stats.ts';
 import { parseExtraction, type TaskDefinition, type Thresholds } from '../task.ts';
 import { verifyOutcome } from '../verdict.ts';
@@ -71,6 +73,18 @@ export interface CheckerInput {
   threshold: number;
   /** Its answers to the round-1 values, by document, then by field. */
   answers: ReadonlyMap<string, Record<string, Answer>>;
+  /** Isotonic fit of this checker's round-1 probabilities, fitted on the whole calibration split. */
+  isotonic?: IsoStep[];
+}
+
+/** How well p(supported) predicts that the writer's round-1 value is right, on the test split. */
+export interface Reliability {
+  /** ECE over 10 equal-width bins. */
+  eceRaw: number;
+  /** The calibration split's isotonic fit applied to the test split (held out); null when the checker has no fit. */
+  eceCalibrated: number | null;
+  raw: Bin[];
+  calibrated: Bin[] | null;
 }
 
 interface CannotTell {
@@ -89,6 +103,7 @@ export interface CheckerResult {
   precision: number | null;
   confidentWrong: number;
   cannotTell: { value: CannotTell; null: CannotTell };
+  reliability: Reliability;
 }
 
 export interface CalibrationFacts {
@@ -99,6 +114,8 @@ export interface CalibrationFacts {
     string,
     {
       verify1?: { slots: number; wrong: number };
+      /** Quality of verify1 on the calibration split; calibrated ECE there is 2-fold out of sample. */
+      verify1Quality?: { auc: number; eceRaw: number; eceCalibrated: number };
       verify2?: { slots: number; wrong: number };
       /** verify2 restricted to the slots the same model's verify1 did not accept. */
       verify2Conditional?: { slots: number; wrong: number };
@@ -345,6 +362,8 @@ function checkerResult(c: CheckerInput, i: ExtractReportInput): CheckerResult {
   let acceptedRight = 0;
   let wrong = 0;
   const ct = { value: { proposals: 0, cannotTell: 0 }, null: { proposals: 0, cannotTell: 0 } };
+  const ps: number[] = [];
+  const ys: boolean[] = [];
   for (const row of rows) {
     const res = i.normal.results.get(customId(row.id, 1));
     const parsed = res?.ok ? parseExtraction(task, res.text ?? '') : undefined;
@@ -355,6 +374,8 @@ function checkerResult(c: CheckerInput, i: ExtractReportInput): CheckerResult {
       const o = verifyOutcome(asChoice(answers[f]), c.threshold);
       const right = scoreSlot(f as VrduField, value, goldOf(row, f)).correct;
       slots++;
+      ps.push(verifyPoint(answers[f], right).p);
+      ys.push(right);
       const kind = value === null ? 'null' : 'value';
       ct[kind].proposals++;
       if (o.verdict === 'cannot_tell') ct[kind].cannotTell++;
@@ -365,6 +386,7 @@ function checkerResult(c: CheckerInput, i: ExtractReportInput): CheckerResult {
       }
     }
   }
+  const calibratedPs = c.isotonic ? ps.map((p) => applyIsotonic(c.isotonic!, p)) : null;
   const part = (x: { proposals: number; cannotTell: number }): CannotTell => ({ ...x, share: x.proposals ? x.cannotTell / x.proposals : null });
   return {
     model: c.model,
@@ -375,6 +397,12 @@ function checkerResult(c: CheckerInput, i: ExtractReportInput): CheckerResult {
     precision: accepted ? acceptedRight / accepted : null,
     confidentWrong: wrong,
     cannotTell: { value: part(ct.value), null: part(ct.null) },
+    reliability: {
+      eceRaw: ps.length ? ece(ps, ys) : 0,
+      eceCalibrated: calibratedPs && ps.length ? ece(calibratedPs, ys) : null,
+      raw: reliabilityBins(ps, ys),
+      calibrated: calibratedPs ? reliabilityBins(calibratedPs, ys) : null,
+    },
   };
 }
 
@@ -473,6 +501,36 @@ function operatingSection(r: ExtractReport, o: NonNullable<ExtractReport['operat
   return L;
 }
 
+const ece3 = (x: number | null | undefined) => (x === undefined || x === null || Number.isNaN(x) ? '–' : x.toFixed(3));
+const pct1 = (x: number) => (Number.isNaN(x) ? '' : `${(100 * x).toFixed(1)}%`);
+
+function calibrationSection(r: ExtractReport): string[] {
+  if (!r.checkers.length) return [];
+  const L: string[] = ['', '## Checker calibration, round 1', ''];
+  L.push(
+    "Each checker's p(supported) for the round-1 value, against whether that value is right. ECE is the expected calibration error over 10 equal-width bins: " +
+      'the average gap between mean p and the share right, weighted by bin size. "Calibrated" means isotonic regression fitted on the calibration split. ' +
+      'On the calibration split the calibrated ECE is 2-fold out of sample (fitted on one half, measured on the other). ' +
+      'On the test split it uses the fit from the calibration split, so it is held out.',
+    '',
+  );
+  L.push('| Checker | AUC (calibration) | ECE raw (calibration) | ECE calibrated (calibration) | ECE raw (test) | ECE calibrated (test) |', '|---|---|---|---|---|---|');
+  for (const c of r.checkers) {
+    const q = r.calibration.models[c.model]?.verify1Quality;
+    L.push(`| ${c.model} | ${ece3(q?.auc)} | ${ece3(q?.eceRaw)} | ${ece3(q?.eceCalibrated)} | ${ece3(c.reliability.eceRaw)} | ${ece3(c.reliability.eceCalibrated)} |`);
+  }
+  for (const c of r.checkers) {
+    L.push('', `Reliability on the test split, \`${c.model}\`:`, '');
+    L.push('| Bin | Fields | Mean p raw | Right raw | Fields | Mean p calibrated | Right calibrated |', '|---|---|---|---|---|---|---|');
+    c.reliability.raw.forEach((b, k) => {
+      const cb = c.reliability.calibrated?.[k];
+      const cells = (x: Bin | undefined) => (x && x.n ? [n0(x.n), pct1(x.meanP), pct1(x.accuracy)] : ['', '', '']).join(' | ');
+      L.push(`| ${b.lo.toFixed(1)}–${b.hi.toFixed(1)} | ${cells(b)} | ${cells(cb)} |`);
+    });
+  }
+  return L;
+}
+
 export function renderExtractReport(r: ExtractReport): string {
   const L: string[] = [headline(r), ''];
   L.push(`# Bench ${r.benchId}: VRDU extraction (${r.split} split)`, '');
@@ -528,6 +586,8 @@ export function renderExtractReport(r: ExtractReport): string {
       `| ${c.model} | ${c.threshold > 1 ? 'never' : c.threshold.toFixed(3)} | ${n0(c.slots)} | ${pct(c.acceptedShare)} | ${pct(c.precision)} | ${n0(c.confidentWrong)} | ${ct(c.cannotTell.value)} | ${ct(c.cannotTell.null)} |`,
     );
   }
+
+  L.push(...calibrationSection(r));
 
   if (r.operatingPoint) L.push(...operatingSection(r, r.operatingPoint));
 

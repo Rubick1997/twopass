@@ -21,6 +21,7 @@ import {
   type OperatingInput,
   type TextCheck,
 } from './extract/report.ts';
+import { reliabilitySvg } from './extract/reliability-svg.ts';
 import { customId, parseLedger, replay, verifyKey, type RunState } from './ledger.ts';
 import type { RowRecord } from './pipeline.ts';
 import { loadRun } from './run.ts';
@@ -378,6 +379,7 @@ interface AssembledReport {
   baselineDir: string;
   normalCsv: string;
   baselineCsv: string;
+  svg: string | null;
 }
 
 /**
@@ -406,6 +408,7 @@ async function assembleReport(
     model,
     threshold: model === state.decision ? thresholds.t1 : fit(model, 'verify1'),
     answers: checkerAnswers(normalDir, normalSt, model, verifyModel),
+    ...(calibration.models[model]?.verify1?.isotonic ? { isotonic: calibration.models[model]!.verify1!.isotonic } : {}),
   }));
   const operating = operatingInput(calibration, state.decision, decisionModels, (model) => checkerAnswers(normalDir, normalSt, model, verifyModel));
   const report = buildExtractReport({
@@ -435,6 +438,7 @@ async function assembleReport(
     markdown: renderExtractReport(report),
     normalDir,
     baselineDir,
+    svg: report.checkers.some((c) => c.reliability.raw.some((b) => b.n)) ? reliabilitySvg(report.checkers) : null,
     normalCsv: csv(computeFieldOutcomes(normalSt, { ...ctx, mode: 'normal' }), normalRun.records),
     baselineCsv: csv(computeFieldOutcomes(baselineSt, { ...ctx, rows: baselineRun.records, mode: 'baseline' }), baselineRun.records),
   };
@@ -443,6 +447,7 @@ async function assembleReport(
 function writeReportFiles(benchDir: string, a: AssembledReport): void {
   writeFileSync(join(benchDir, 'bench-report.json'), JSON.stringify(a.report, null, 2) + '\n');
   writeFileSync(join(benchDir, 'bench-report.md'), a.markdown);
+  if (a.svg) writeFileSync(join(benchDir, 'reliability.svg'), a.svg);
   writeFileSync(join(a.normalDir, 'enriched-fields.csv'), a.normalCsv);
   writeFileSync(join(a.baselineDir, 'enriched-fields.csv'), a.baselineCsv);
 }
@@ -559,6 +564,7 @@ function calibrationFacts(c: CalibrationFile, models: string[]): CalibrationFact
     if (!e) continue;
     out.models[m] = {
       ...(e.verify1 ? { verify1: { slots: e.verify1.n, wrong: e.verify1.n - e.verify1.correct } } : {}),
+      ...(e.verify1 ? { verify1Quality: { auc: e.verify1.auc, eceRaw: e.verify1.eceRaw, eceCalibrated: e.verify1.eceCalibrated } } : {}),
       ...(e.verify2 ? { verify2: { slots: e.verify2.n, wrong: e.verify2.n - e.verify2.correct } } : {}),
       ...(e.verify2Conditional ? { verify2Conditional: { slots: e.verify2Conditional.n, wrong: e.verify2Conditional.n - e.verify2Conditional.correct } } : {}),
     };

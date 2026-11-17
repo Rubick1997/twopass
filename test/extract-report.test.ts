@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { Answer } from '../src/decide/model.ts';
-import { buildExtractReport, fieldCsvRecords, headline, renderExtractReport } from '../src/extract/report.ts';
+import { buildExtractReport, type CalibrationFacts, fieldCsvRecords, headline, renderExtractReport } from '../src/extract/report.ts';
 import { computeFieldOutcomes } from '../src/extract/outcomes.ts';
 import { customId, replay, type LedgerEvent } from '../src/ledger.ts';
+import { reliabilitySvg } from '../src/extract/reliability-svg.ts';
 import { toyTask } from './extract-helpers.ts';
 
 // A hand-built ledger. Gold (a / b / c):
@@ -252,5 +253,55 @@ describe('refit and 98% sections', () => {
     expect(md).not.toContain('For t1, no threshold');
     const none = renderExtractReport(buildExtractReport({ ...base, thresholds, checkers: [], calibration: cal }));
     expect(none).not.toContain('98% operating point');
+  });
+});
+
+describe('checker calibration', () => {
+  const base = { benchId: 'b', createdAt: at, split: 'test' as const, task: toyTask, rows, normal, baseline, thresholds, thresholdsSource: 's', decisionModel: 'dec', baselineModel: 'opus', target: 0.95 };
+  const build = (checker: object, models: CalibrationFacts['models'] = { dec: { verify1: { slots: 1800, wrong: 90 } } }) =>
+    buildExtractReport({ ...base, checkers: [{ model: 'dec', threshold: 0.9, answers: r1Answers, ...checker }], calibration: { runId: 'c', documents: 300, models } });
+
+  // Nine slots. p: .95 x6 (five right, D2.b wrong), .5 right, .2 wrong, .3 wrong.
+  // ECE raw = (6*|.95-5/6| + |.5-1| + |.2-0| + |.3-0|) / 9 = 17/90.
+  it('raw ECE and bins match a hand computation; calibrated is null without an isotonic fit', () => {
+    const rel = build({}).checkers[0]!.reliability;
+    expect(rel.eceRaw).toBeCloseTo(17 / 90, 10);
+    expect(rel.eceCalibrated).toBeNull();
+    expect(rel.calibrated).toBeNull();
+    expect(rel.raw).toHaveLength(10);
+    expect(rel.raw[9]).toMatchObject({ n: 6 });
+    expect(rel.raw[9]!.accuracy).toBeCloseTo(5 / 6);
+    expect(rel.raw[0]!.n).toBe(0);
+  });
+
+  it('applies a calibration-split isotonic fit to the test slots', () => {
+    const rel = build({ isotonic: [{ x: 1, y: 0.8 }] }).checkers[0]!.reliability;
+    // every slot maps to .8; 6 of 9 are right
+    expect(rel.eceCalibrated).toBeCloseTo(0.8 - 6 / 9, 10);
+    expect(rel.calibrated![8]!.n).toBe(9);
+    expect(rel.calibrated![8]!.meanP).toBeCloseTo(0.8);
+  });
+
+  it('renders the section, with the calibration-split quality when present and a dash when missing', () => {
+    const withQ = renderExtractReport(build({ isotonic: [{ x: 1, y: 0.8 }] }, { dec: { verify1Quality: { auc: 0.91, eceRaw: 0.05, eceCalibrated: 0.02 } } }));
+    expect(withQ).toContain('## Checker calibration, round 1');
+    expect(withQ).toContain('| dec | 0.910 | 0.050 | 0.020 | 0.189 | 0.133 |');
+    expect(withQ).toContain('| 0.9–1.0 | 6 | 95.0% | 83.3% |  |  |  |');
+    expect(withQ).toContain('| 0.8–0.9 |  |  |  | 9 | 80.0% | 66.7% |');
+    expect(withQ.indexOf('## Checker calibration')).toBeGreaterThan(withQ.indexOf('## Checkers, round 1 only'));
+    const without = renderExtractReport(build({}));
+    expect(without).toContain('| dec | – | – | – | 0.189 | – |');
+    expect(without.match(/## Checker calibration/g)).toHaveLength(1);
+  });
+
+  it('draws well-formed SVG with one title per checker and escaped model names', () => {
+    const a = build({ isotonic: [{ x: 1, y: 0.8 }] }).checkers[0]!;
+    const svg = reliabilitySvg([a, { ...a, model: 'x<y&z' }]);
+    expect(svg.startsWith('<svg')).toBe(true);
+    expect(svg.trimEnd().endsWith('</svg>')).toBe(true);
+    expect(svg).toContain('>dec</text>');
+    expect(svg).toContain('x&lt;y&amp;z');
+    expect(svg).not.toContain('x<y');
+    expect(svg).not.toMatch(/<script|href=|<image/);
   });
 });

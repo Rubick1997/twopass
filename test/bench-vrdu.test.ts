@@ -63,6 +63,10 @@ describe('bench vrdu --split dev, end to end on mocks', () => {
     expect(report.checkers.map((c: { model: string }) => c.model)).toEqual(['dec/main', 'dec/other']);
     expect(report.checkers[1].slots).toBeGreaterThan(0);
     expect(report.configs.baseline.accuracy).toBe(1);
+    expect(report.checkers[0].reliability.raw).toHaveLength(10);
+    expect(report.checkers[0].reliability.eceCalibrated).not.toBeNull();
+    expect(md).toContain('## Checker calibration, round 1');
+    expect(readFileSync(join(benchDir, 'reliability.svg'), 'utf8').startsWith('<svg')).toBe(true);
     expect(report.configs.full.confidentWrong).toBe(0);
     expect(report.textCheck.changedInside).toBeGreaterThan(0); // the fixture has CRLF inside every document
     expect(md).toContain('## Document text');
@@ -198,6 +202,8 @@ describe('round-2 threshold: conditional fit, fallback and --refit', () => {
     const report = readJson(join(benchDir, 'bench-report.json'));
     expect(report.thresholds.t2).toBe(state.refit.thresholds.t2);
     expect(existsSync(join(benchDir, 'bench-report.first.json'))).toBe(true);
+    expect(md).toContain('## Checker calibration, round 1');
+    expect(existsSync(join(benchDir, 'reliability.svg'))).toBe(true);
 
     // a second refit does not overwrite the first copies, and keeps the first-read thresholds
     await refitVrduBench({ runsRoot: join(root, 'runs'), id: state0.benchId, log: () => {} });
