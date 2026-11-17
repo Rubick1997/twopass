@@ -1,17 +1,36 @@
 # TwoPass
 
-**Run repetitive LLM work at batch prices, with a cheap decision model checking every row.** Rows it trusts are
-accepted. Rows it doubts are re-run on a stronger model, and whatever is still uncertain goes to a human.
+**Run repetitive LLM work at batch prices, with a cheap decision model checking every answer.** Answers it trusts are
+accepted. Answers it doubts are re-run on a stronger model, and whatever is still uncertain goes to a human.
 
-On the full Banking77 test split, with Cloudflare's Clef as the controller:
+**Part 2, field extraction** (500 public US government forms, 6 fields each, Clef as the checker, no re-run):
+
+> **3,000 fields · 81.5% accepted at 95.5% precision · 555 sent to a person · $0.11 per 1,000 fields**
+
+**Part 1, classification** (Banking77, 77 labels, Clef as the controller):
 
 > **3,080 rows · 3,002 auto-accepted at 96% precision · 79 re-run · 78 need a look · $1.31 · 159 min**
 
-**Write-up:** [I built a tool to check AI's work. The most useful thing it says is "I'm not sure."](https://medium.com/@vinch1910/i-built-a-tool-to-check-ais-work-the-most-useful-thing-it-says-is-i-m-not-sure-f7d656efc286) — the story behind these numbers, including the cost comparison that didn't survive.
+| | Part 1: pick one of 77 labels | Part 2: extract 6 fields from a form |
+|---|---|---|
+| Test items | 3,080 messages | 3,000 field slots (500 documents) |
+| Accepted automatically | 97.5% | 81.5% |
+| Precision of accepted answers (target 95%) | 95.7% | 95.5% |
+| Sent to a person | 2.5% | 18.5% |
+| Accuracy, no human (tool's own answer everywhere) | 94.3% | 86.8% (92.8% with the stronger re-extraction) |
+| Cost per 1,000 items | $0.43 | $0.11 ($0.49 with the re-extraction) |
+| Frontier baseline (Claude Opus 5.5 on everything) | 88.1%, $0.45 | 91.7%, $0.99 |
 
-That's 94.3% end-to-end accuracy for $0.43 per 1,000 rows. A frontier model (Claude Opus 5.5) answering every row
+The threshold fitted on held-out data held on both tasks. What changed is how much the checker can vouch for: on
+extraction it accepted four fifths of the fields instead of nearly all, and it could not tell a good re-extraction from
+a bad one at all (see [Extraction results](#results-extraction-vrdu)). The two parts are different tasks with
+different models and prices, so the columns describe each part on its own terms rather than a head-to-head.
+
+**Write-up (part 1):** [I built a tool to check AI's work. The most useful thing it says is "I'm not sure."](https://medium.com/@vinch1910/i-built-a-tool-to-check-ais-work-the-most-useful-thing-it-says-is-i-m-not-sure-f7d656efc286) — the story behind these numbers, including the cost comparison that didn't survive.
+
+On part 1, that's 94.3% end-to-end accuracy for $0.43 per 1,000 rows. A frontier model (Claude Opus 5.5) answering every row
 got 88.1% for $0.45 per 1,000 rows. With prompt caching on both sides, TwoPass costs about the same as the frontier
-model and is about 6 points more accurate, with 2.5% of rows sent to a person. See [Results](#results), and the
+model and is about 6 points more accurate, with 2.5% of rows sent to a person. See [Results](#results-classification-banking77), and the
 [caveats](#limitations) before quoting this.
 
 Earlier numbers were higher because those runs had no prompt caching: every row paid full price for the same
@@ -40,6 +59,11 @@ CSV ──► Round 0: triage       decision model picks the answer itself (clos
 - **Nothing is lost or paid twice.** Every result is written to an append-only ledger as it arrives. Kill the
   process at any point, then run `twopass resume`.
 
+**Extraction tasks** (part 2) work per document: there is no round 0, because the checker can't propose a value. The
+writer returns every field as JSON (a string, or `null` for "not in this document"); the checker gets one call per
+document with one question per field; each field is accepted or not on its own. If any field is not accepted, the
+stronger model re-extracts the document and only the unaccepted fields take its value.
+
 This is a workflow with a learned controller, not an autonomous agent. The steps are fixed, and the decision model
 only chooses which way each row goes.
 
@@ -55,6 +79,12 @@ export OPENROUTER_API_KEY=sk-or-...
 # a small end-to-end benchmark: about $0.20 (it cost $0.18 on 2026-11-10), capped at $1 by --max-usd
 # (the first run also downloads Banking77, a minute or two)
 node src/cli.ts bench banking77 --calibration-size 60 --test-size 40 --max-usd 1
+
+# part 2, extraction: the 30-document dev split, for debugging only (it cost $0.22 on 2026-11-16).
+# Claude models are called through the Anthropic API directly, so this also needs ANTHROPIC_API_KEY
+# (both keys can go in a gitignored .env in the repo root). The first run downloads the VRDU forms.
+export ANTHROPIC_API_KEY=sk-ant-...
+node src/cli.ts bench vrdu --split dev --also jev,luna --baseline claude-opus-5-5 --max-usd 1
 ```
 
 Almost all of the time is waiting for the provider's batch queue: several batch rounds, each 4–8 minutes on a quiet
@@ -194,7 +224,7 @@ open in your browser can't write to them.
 
 Coding agents: see [AGENTS.md](AGENTS.md).
 
-## Results
+## Results: classification (Banking77)
 
 Banking77 has 77 intent labels for customer messages to a bank. Thresholds were fitted on 1,000 held-out train rows
 for ≥95% precision. Every number below is on the full test split (3,080 rows), except the Opus baseline, which ran on a
@@ -230,6 +260,96 @@ What the numbers say:
   accuracy and knowing which rows to check, not price.
 - **Escalation is still the biggest writing cost.** Sonnet re-runs dominate the writing cost in the Jev and Luna
   configurations; Clef settles almost everything in round 0.
+
+## Results: extraction (VRDU)
+
+The question for part 2: does a decision-model checker with a fitted threshold still give 95% precision when there is
+no fixed list of answers? The checker can no longer pick the answer itself; it can only judge a value someone else
+wrote, including "this field isn't in the document".
+
+**Data.** The Registration Forms part of [VRDU](https://github.com/google-research-datasets/vrdu): 1,915 Foreign
+Agents Registration Act filings from the US Department of Justice, in three templates, with the OCR text included.
+Six fields per document (`file_date`, `foreign_principle_name` (the dataset's spelling), `registrant_name`,
+`registration_num`, `signer_name`, `signer_title`). About a quarter of the field slots have no value, so "not in
+the document" is often the right answer. Our own split, by document, stratified by template, fixed seed
+([`bench/vrdu/splits.json`](bench/vrdu/splits.json)): 30 dev, 300 calibration (1,800 slots), 500 test (3,000 slots).
+The other 1,085 documents were not used.
+
+**Models.** Writer: Claude Haiku 5.5 (thinking off). Re-extraction: Claude Sonnet 5.5 (effort low). Baseline: Claude
+Opus 5.5 on every document. All three through Anthropic's Message Batches API directly, at batch prices; no prompt
+caching, because each model reads each document once. Checkers: Clef (the one the pipeline runs with), Jev and Luna
+on OpenRouter; all three judged the same round-1 values.
+
+**Scoring.** One field slot is one unit. Normalised match: Unicode NFKC, lower case, whitespace collapsed,
+surrounding punctuation trimmed, dates parsed to ISO, registration numbers compared on digits. A `null` is right only
+when the label is blank. Exact match is reported too.
+
+Test split, thresholds fitted on the calibration split for 95% precision (Clef: t1 = 0.822, t2 = never):
+
+| Configuration | Accepted | Precision of accepted | Confident wrong | Sent to a person | Accuracy, own values | Cost / 1k fields |
+|---|---|---|---|---|---|---|
+| Baseline: Opus 5.5 on every document | 100% | 91.7% | 249 (8.3%) | 0% | 91.7% | $0.99 |
+| Writer alone (Haiku, no checker) | – | – | – | – | 86.8% | $0.025 |
+| **Simple: writer → Clef → person** | **81.5%** | **95.5%** | **109 (3.6%)** | **18.5%** | 86.8% | **$0.11** |
+| Full: + Sonnet re-extraction → Clef → person | 81.5% | 95.5% | 109 (3.6%) | 18.5% | 92.8% | $0.49 |
+
+"Confident wrong" is a field accepted without a person and wrong: 36 per 1,000 fields for the simple pipeline
+against 83 per 1,000 for Opus. "Accuracy, own values" counts the fields sent to a person with the tool's own value.
+
+What the numbers say:
+
+- **The fitted threshold held.** 95.5% precision against a 95% target, on documents the threshold never saw. Jev
+  (95.3%) and Luna (95.8%) at their own thresholds landed in the same place, accepting 82.4% and 85.1%.
+- **The simple version is the one to use.** No round-2 threshold reaches 95% on the fields round 1 rejected (see
+  the method change below), so the re-extraction accepts nothing. It only improves the value a person is shown
+  (the flagged field's own value is right 80.9% of the time instead of 48.5%), at 4.6 times the cost.
+- **Blanks are harder to vouch for than values.** Fields with a value: 90.4% accepted at 95.8%. Blank fields: 52.3%
+  accepted at 94.2%.
+- **One field fails the target.** `foreign_principle_name` (a free-text box that often holds a list): 64.6% accepted
+  at 87.0%. Registration numbers: 90.2% at 99.8%. Signer titles: 83.6% at 98.6%.
+- **No checker ever said `cannot_tell`.** 0 times in 3,000 fields for each of the three, though it was offered on
+  every question. Uncertainty shows up only in the probabilities.
+- **The probabilities are already close to calibrated.** Expected calibration error of p(supported) on the test
+  split: Clef 0.031, Jev 0.039, Luna 0.024 raw; 0.011–0.013 after isotonic calibration fitted on the calibration
+  split. Clef is overconfident between 0.3 and 0.8, where few fields fall; in the top bin (0.9–1.0),
+  which holds two thirds or more of the fields, Clef's mean p is within a point of the share right, while Jev and Luna run 2–3 points overconfident. The bench writes the plot
+  as `reliability.svg`.
+- **Stricter costs a lot of coverage.** Refitted for 98% precision (no new calls), Clef accepts 37.7% at 97.4%;
+  Jev and Luna 43.9% and 42.2% at 98.5%.
+
+Cost per 1,000 documents (6 fields each): Opus $5.93; simple $0.63 (Haiku $0.15, Clef $0.48); the re-extraction
+adds $2.30 (Sonnet $2.06, Clef $0.24). The calibration and test runs cost $6.01 together; the three dev runs about $1.
+A test round took 3–4 minutes in the batch queue on 2026-11-16.
+
+**Method change after the first test read.** The round-2 threshold was first fitted on all 1,800 calibration fields.
+In a real run, round 2 only judges the fields round 1 did not accept, which are the harder ones. With that first fit
+(t2 = 0.435) the full pipeline accepted 97.5% at **94.2%**, below target. The threshold was refitted on the
+calibration fields round 1 did not accept (317 for Clef, 56 of them wrong); no threshold reaches 95% there, so
+t2 = never. That used calibration data only and no model calls: the test ledgers were replayed, and round 1 did not
+change. The test split was therefore read twice; both reads are in the bench report
+(`node src/cli.ts bench vrdu --id <benchId> --refit` reproduces the second).
+
+**Label review.** The 109 confident-wrong fields were reviewed by hand against the document text: in 70 the tool's
+value was right and the label wrong or incomplete (OCR-garbled dates, labels that cut off a name or include stray
+form text), in 20 the tool was wrong (15 of them `foreign_principle_name`), and 19 could not be decided. Opus's 249
+wrong fields were reviewed the same way: 76 Opus right, 86 wrong, 87 undecided. Most of Opus's real mistakes (70 of 86)
+were blanks where the form does have a date or a signer title.
+
+| Confident wrong per 1,000 fields | Against the labels | After review (undecided counted as wrong / as right) |
+|---|---|---|
+| Simple pipeline (accepted fields) | 36 | 13 / 7 |
+| Opus 5.5 (every field) | 83 | 58 / 29 |
+
+After review, the simple pipeline's accepted fields are 98.4–99.2% right (raw 95.5%); Opus is 94.2–97.1% right
+overall (raw 91.7%). The review covered only fields scored wrong, for both systems; fields scored right and the
+fields sent to a person were not re-checked. One reviewer, the author, who could see which value was the tool's.
+Treat the adjusted figures as a second reading next to the raw ones, not a replacement.
+
+**Scorer cross-check.** VRDU's own evaluator (google-research, `vrdu/benchmark_utils.py`) on the same test
+predictions ([`scripts/vrdu-crosscheck.py`](scripts/vrdu-crosscheck.py)): Opus micro F1 91.9% official vs 92.9% with
+our scorer; the full pipeline's values 91.5% vs 92.9%. Ours is more lenient on trailing punctuation or form text in
+a label, written-out dates and letter case; the official one accepts a few date formats ours doesn't
+(`11.23.2010`). The ranking doesn't change.
 
 ## Cost
 
@@ -299,6 +419,25 @@ are not in the repository (`runs/` can hold API outputs), so the script needs yo
 - **One dataset.** Thresholds are per task: fit them on your own labeled data. Vendor defaults are never used.
 - **Small samples in places.** The baseline ran on 1,000 rows, and Clef's verify stages saw fewer than 100 rows on test.
 
+Extraction (part 2):
+
+- **The field definitions were tuned on the dev split.** Two of the six (registrant name and foreign principal) were
+  reworded after the first two dev runs showed that the labels follow form conventions the plain field names don't
+  state (on short forms, the registrant is the firm, not the person filing). The definitions were frozen before the
+  calibration and test runs.
+- **The test split was read twice**, once with each round-2 threshold (see the method change above). Round 1, which
+  carries every accepted field, was fitted once and never changed.
+- **The labels are noisy**, and the review that measures it is a single, non-blind reviewer covering only the fields
+  scored wrong.
+- **The re-extraction can't be vouched for.** No checker reached 95% precision on round-2 values, so the full
+  pipeline's extra accuracy reaches people only as a better suggestion on the fields they review.
+- **One dataset, three templates of one government form.** The OCR text comes with the dataset; nothing here tests
+  OCR, layout or scanned images.
+- **The 98% operating point is a replay of round 1 only.** At the stricter threshold, 530 more fields would need a
+  re-extraction the run never asked for, so the full pipeline has no 98% figure.
+- **Licence.** The google-research repositories state that their datasets are CC BY 4.0; the VRDU data repository
+  itself ships no licence file. The documents are US government public records.
+
 Non-goals: a hosted service, auth or billing; storing other people's keys; provider adapters (OpenRouter covers
 them); Google Sheets; more than two batch rounds; automatic model selection; agent loops on batch.
 
@@ -315,6 +454,12 @@ pnpm dev:ui      # UI dev server with hot reload; run `node src/cli.ts ui --no-o
 
 Banking77: Casanueva et al., *Efficient Intent Detection with Dual Sentence Encoders* (2020), PolyAI, licensed
 [CC-BY-4.0](https://huggingface.co/datasets/PolyAI/banking77).
+
+VRDU: Zilong Wang, Yichao Zhou, Wei Wei, Chen-Yu Lee and Sandeep Tata, *VRDU: A Benchmark for Visually-rich Document
+Understanding*, KDD 2023 ([data](https://github.com/google-research-datasets/vrdu)), CC BY 4.0 per google-research.
+`scripts/vrdu-crosscheck.py` calls VRDU's evaluator from
+[google-research/vrdu](https://github.com/google-research/google-research/tree/master/vrdu) (Apache 2.0), which is not
+included here.
 
 ## License
 
