@@ -288,8 +288,8 @@ export async function checkCsv(path: string, task: TaskDefinition, opts: CheckOp
     for (const [type, rows] of findPii(kept.map((r) => ({ n: r.n, values: contentColumns.map((c) => cell(r, c)) })))) {
       warn(
         `possible_pii_${type}`,
-        `${plural(rows.length, 'row')} may contain ${PII_NAMES[type]}. OpenRouter batch has no zero data retention; ` +
-          'use public or non-sensitive data.',
+        `${plural(rows.length, 'row')} may contain ${PII_NAMES[type]}. Batch providers store requests and results ` +
+          '(OpenRouter batch has no zero data retention); use public or non-sensitive data.',
         rows,
       );
     }
