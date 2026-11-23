@@ -110,3 +110,76 @@ verify2 → t2).
 The part 1 calibration ledger already holds Jev 1.14, Clef and Luna scores for all three stages, so a recalibration for
 a checker-only change needs new decision calls on those 1,000 rows (≈ $0.15 for Jev 1.13). A writer change needs a new
 `collect` run, because its writer outputs differ.
+
+---
+
+# Results (23 Nov 2026)
+
+## Noise floor: 8 runs of the unchanged config (Clef, 1,540 rows)
+
+Auto-accepted rows right 95.59–95.79% (spread 0.2 pts, so the promise floor is 94.8%). Auto-accepted 97.1–97.5%.
+Accuracy 93.83–94.09%. Auto-accepted but wrong 63–66. Up to 17 answer flips between two runs; 97.2% of rows identical
+in all 8. The pipeline is not deterministic, but it is quiet. None of the 56 ordered pairs of these runs is blocked by
+any gate. Per label (20 rows), the smallest visible drop is 3 rows (15 points) for 76 labels and 4 rows for one
+(`mdd.md`). Files: `gates/banking77.noise.json`, `bench/gate/experiment/noise.sh`.
+
+## Gates × changes (`matrix.csv`)
+
+Accuracy delta and accepted-precision delta are on the CI slice; the test split (3,080 rows) was run for base, 6 and
+6r only (budget). Candidates 3, 6r and 0a reuse change 6's base run (same config, run minutes earlier).
+
+| # | Change | Accuracy Δ | Precision Δ | G1 | G2 | G3 | Ground truth (test) |
+|---|---|---|---|---|---|---|---|
+| 6 | Refit thresholds at 93% (promise stays 95%) | +0.39 | −0.95 | pass | pass | **block** | regression: 95.6% → 94.3% (CI 93.4–95.0%), accuracy +0.3 |
+| 6r | 6 + the gate's proposal applied | −0.45 | +0.11 | pass | pass | pass | neutral: 96.0% (CI 95.2–96.6%), auto-accept 97.4% → 96.7% |
+| 1 | Jev 1.14 → 1.13, thresholds unchanged (Jev base) | −0.06 | −0.71 | pass | pass | block | not run. Jev base was already at 94.0%; no Jev noise file |
+| 3 | Clef → Jev, Clef thresholds | −13.77 | −13.10 | block | block | block | not run (obvious) |
+| 0a | README edit (control) | −0.06 | −0.19 | pass | pass | pass | not run (a no-op; the noise runs measure the same thing) |
+
+Not run (budget): 0b, 0c, 2, 4, 5, 7, 1r, 2r.
+
+## Recalibration (6 → 6r)
+
+Proposed t0 0.5323 / t1 0.8265 / t2 0.8097 (was 0.2349 / 0.755 / 0.7269 in change 6; part 1: 0.4913 / 0.7918 / 0.7981),
+fitted on 800 calibration rows. On the 200 held-out rows: 95.0% → 97.4% right (Wilson lower bound 91.0% → 94.0%),
+auto-accept 100% → 95.5%. On the test split: 96.0% right, auto-accept 96.7% (base 97.4%, change 6 99.9%).
+
+## Reviewer rows (change 6)
+
+4 of the 10 rows in the comment had a wrong head answer, all four auto-accepted (`reviewcheck.ts`).
+
+## Cost and runtime
+
+CI run on Clef: ≈ $0.67 per side at list price (≈ $0.64 Clef on OpenRouter, ≈ $0.03 Claude direct), 85–107 s per
+side. Jev pair: $1.17 (169 s for the Jev 1.13 side). Test-split run: $1.22–1.32, 200–250 s. Clef costs more per row
+than Haiku: its 77-option triage prompt is ≈ 2,100 tokens at $0.192 per million with no cache price listed, while Haiku
+reads its 1,941-token label list from cache. Total spend, 23 Nov: ≈ $13.70 list price (≈ $12.70 OpenRouter, ≈ $1.00
+Anthropic).
+
+## Providers
+
+Haiku 5.5 and Sonnet 5.5 went to Anthropic directly (sync Messages API), served as `claude-haiku-5-5` /
+`claude-sonnet-5-5`. Clef, Jev 1.13 and Jev 1.14 went through OpenRouter's Decisions API, served as `cloudflare/clef`
+(DeepInfra), `typesafe/jev-1.13-20260917` and `typesafe/jev-1.14-20261014`. Cache hits show in Anthropic's usage on
+every run: 172k–198k cached tokens read per CI run, plus 1-hour cache writes on a cold start.
+
+## Findings worth knowing
+
+- With true precision at the target, "Wilson lower bound ≥ 95%" fails unchanged code on every PR (≈ 94% on 1,540
+  rows). G3 checks the point estimate against target − noise, plus "not clearly below base".
+- Replayed on its own 1,000 calibration rows, part 1's Clef fit gives 94.6% (each stage is fitted to ≥ 95% alone).
+- Per-stage fits on small calibration sets overfit (the smoke fixture: 32 rows). The proposal warns when fewer than
+  30 held-out rows are accepted.
+- The gate refuses thresholds fitted for another checker ID. A version bump only gets through that check under an
+  alias whose version changes silently (e.g. `~typesafe/jev-latest`); change 1 used `--allow-threshold-mismatch` to
+  measure that case.
+
+## Quick start on a scratch repo (no paid steps)
+
+`git init` and a 120-row CSV (4 labels) → `gate init --data data/labelled.csv --text message --label topic`: four files
+in about a second, no id column needed. Awkward:
+1. Errors printed a stack trace; fixed (one message plus the fixing command).
+2. A 30-rows-per-label CSV splits 15/15 between calibration and slice: `init` notes the short labels, but 60
+   calibration rows are too few for stable thresholds. The docs should say how many labelled rows to start with.
+3. The template's `npm install --global twopass@0.0.1` fails until TwoPass is on npm.
+Not followed: `calibrate --collect` and the noise runs (paid), and the GitHub side (push, secrets, PR) needs approval.
