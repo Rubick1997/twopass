@@ -1,0 +1,6 @@
+id,group,change,g1,g2,g3,ci_accuracy_delta_pts,ci_accepted_precision_delta_pts,ci_accept_share_head,test_run,test_accuracy_delta_pts,test_accepted_precision_base,test_accepted_precision_head,test_accept_share_base,test_accept_share_head,promise_broken_on_test,ground_truth,g1_right,g2_right,g3_right
+6,threshold,"Refit the thresholds at a 93% target instead of 95% (""let's automate more""); the promise stays 95%",pass,pass,block,0.39,-0.95,99.5,yes,0.26,95.60,94.28,97.4,99.9,false,regression,false,false,true
+1,"same accuracy, promise at risk",Checker version change Jev 1.14 -> Jev 1.13 with thresholds unchanged (fitted on 1.14),pass,pass,block,-0.06,-0.71,62.7,no,,,,,,,,,,
+3,"same accuracy, promise at risk",Checker Clef -> Jev 1.14 with Clef's thresholds unchanged,block,block,block,-13.77,-13.10,92.7,no,,,,,,,,,,
+6r,recovery,Change 6 with the gate's proposed recalibration applied (gate recalibrate --write),pass,pass,pass,-0.45,0.11,96.6,yes,-0.13,95.60,96.00,97.4,96.7,false,neutral,true,true,true
+0a,control,README edit (no-op),pass,pass,pass,-0.06,-0.19,97.5,no,,,,,,,,,,

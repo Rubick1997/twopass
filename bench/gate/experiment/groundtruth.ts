@@ -17,6 +17,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { parse as parseYaml, stringify as toYaml } from 'yaml';
+import { stringify as toCsv } from 'csv-stringify/sync';
 import { readCsvRows } from '../../../src/gate/data.ts';
 import { compareResults } from '../../../src/gate/compare.ts';
 import { runGates } from '../../../src/gate/gates.ts';
@@ -106,18 +107,18 @@ function truth(base: GateResult, head: GateResult) {
 function matrix(): void {
   const noise = readNoise('gates/banking77.noise.json');
   const gtBase = existsSync(join(OUT, 'base.json')) ? readResult(join(OUT, 'base.json')) : undefined;
-  const rows = [
+  const rows: string[][] = [
     [
       'id', 'group', 'change', 'g1', 'g2', 'g3', 'ci_accuracy_delta_pts', 'ci_accepted_precision_delta_pts', 'ci_accept_share_head',
       'test_run', 'test_accuracy_delta_pts', 'test_accepted_precision_base', 'test_accepted_precision_head', 'test_accept_share_base', 'test_accept_share_head',
       'promise_broken_on_test', 'ground_truth', 'g1_right', 'g2_right', 'g3_right',
-    ].join(','),
+    ],
   ];
   const lines: string[] = [];
   for (const cand of candidates) {
     const dir = join(repo, 'runs', 'gate-exp', cand.id);
     if (!existsSync(join(dir, 'head.json'))) {
-      rows.push([cand.id, cand.group, JSON.stringify(cand.change), 'not run', '', '', '', '', '', 'no', '', '', '', '', '', '', '', '', '', ''].join(','));
+      rows.push([cand.id, cand.group, cand.change, 'not run', '', '', '', '', '', 'no', '', '', '', '', '', '', '', '', '', '']);
       continue;
     }
     const base = readResult(join(dir, 'base.json'));
@@ -130,7 +131,7 @@ function matrix(): void {
     const right = (blocked: boolean) => (gt ? String(blocked === gt.regression) : '');
     rows.push(
       [
-        cand.id, cand.group, JSON.stringify(cand.change), pass(g.g1.pass), pass(g.g2.pass), pass(g.g3.pass),
+        cand.id, cand.group, cand.change, pass(g.g1.pass), pass(g.g2.pass), pass(g.g3.pass),
         (100 * (c.head.accuracy - c.base.accuracy)).toFixed(2), (100 * (c.head.acceptedPrecision.point - c.base.acceptedPrecision.point)).toFixed(2), (100 * c.head.acceptShare).toFixed(1),
         gt ? 'yes' : 'no',
         gt ? (100 * (gt.c.head.accuracy - gt.c.base.accuracy)).toFixed(2) : '',
@@ -138,7 +139,7 @@ function matrix(): void {
         gt ? (100 * gt.c.base.acceptShare).toFixed(1) : '', gt ? (100 * gt.c.head.acceptShare).toFixed(1) : '',
         gt ? String(gt.brokenPromise) : '', gt ? gt.verdict : '',
         right(!g.g1.pass), right(!g.g2.pass), right(!g.g3.pass),
-      ].join(','),
+      ],
     );
     if (gt) {
       lines.push(
@@ -154,7 +155,7 @@ function matrix(): void {
   }
   const path = join(repo, 'bench', 'gate', 'matrix.csv');
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, rows.join('\n') + '\n');
+  writeFileSync(path, toCsv(rows));
   console.log(lines.join('\n'));
   console.log(`\nwrote ${path}`);
 }
