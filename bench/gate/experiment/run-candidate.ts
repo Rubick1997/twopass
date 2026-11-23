@@ -1,7 +1,9 @@
 // Runs one candidate change the way the CI workflow would, locally: base and head each run their own code from a git
 // worktree, on the CI slice, then `gate compare` with head's code and config. No PR is opened.
 //
-//   node bench/gate/experiment/run-candidate.ts <id> --max-usd <cap per side> [--base <ref>]
+//   node bench/gate/experiment/run-candidate.ts <id> --max-usd <cap per side> [--base <ref>] [--resume-base <runId>] [--resume-head <runId>]
+//
+// --resume-base / --resume-head continue an interrupted side's run (nothing is paid twice) instead of starting a new one.
 //
 // Paid: two gate runs (≈ $0.67 each for the Clef config). Results go to runs/gate-exp/<id>/ (base.json, head.json,
 // comment.md, compare.txt); a side whose result file exists is reused, never re-run. Keys come from the repo's .env
@@ -62,9 +64,14 @@ function side(name: 'base' | 'head', sha: string, flags: string[]): string {
   }
   const dir = worktree(`${id}-${name}-${sha.slice(0, 7)}`, sha);
   console.log(`  ${name}: gate run in ${dir}`);
+  const resume = flag(`resume-${name}`);
   const r = spawnSync(
     'node',
-    ['src/cli.ts', 'gate', 'run', '--task', c!.task, '--ref', `${id}-${name}`, '--out', file, '--max-usd', maxUsd!, '--runs-root', join(repo, 'runs'), ...flags],
+    [
+      'src/cli.ts', 'gate', 'run', '--task', c!.task, '--ref', `${id}-${name}`, '--out', file, '--max-usd', maxUsd!, '--runs-root', join(repo, 'runs'),
+      ...(resume ? ['--resume', resume] : []),
+      ...flags,
+    ],
     { cwd: dir, env: process.env, stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8' },
   );
   const lines = (r.stdout ?? '').split('\n').filter((l) => l && !/^\s+[✓⚠→]|^checking /.test(l));
