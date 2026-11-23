@@ -9,7 +9,9 @@ runs/*
 !runs/published/
 
 # local working notes: brief, plan, dev-run findings, API verification
-docs/
+# (docs/eval-gate.md is the one public page: the eval gate's reader docs)
+docs/*
+!docs/eval-gate.md
 /manifest.json
 
 # secrets and editor/OS files
