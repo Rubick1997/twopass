@@ -35,7 +35,8 @@ jobs:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     steps:
-      - run: echo "Eval gate skipped: pull requests from forks get no API keys. A maintainer can run it with workflow_dispatch." >> "$GITHUB_STEP_SUMMARY"
+      - run: |
+          echo "Eval gate skipped: pull requests from forks get no API keys. A maintainer can run it with workflow_dispatch." >> "$GITHUB_STEP_SUMMARY"
 
   gate:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
