@@ -13,7 +13,7 @@ import { loadGateConfig } from './task-config.ts';
 export const GATE_USAGE = `twopass gate: a CI gate that enforces the precision promise on auto-accepted rows
 
   twopass gate init --data <csv> --text <col> --label <col> [--id <col>] [--name <name>]
-      [--per-label 20] [--calibration-per-label 15] [--writer …] [--escalation …] [--checker …] [--force]
+      [--per-label 20] [--calibration-per-label 15] [--target 0.95] [--writer …] [--escalation …] [--checker …] [--force]
       writes gates/<name>.task.yaml, the calibration rows, the CI slice and .github/workflows/eval-gate.yml (no API calls)
   twopass gate calibrate --task <file> [--from-run <dir> | --collect] [--models a,b] [--max-usd <n>]
       fits the thresholds the gate runs on, from calibration rows only. Without --max-usd no model is called.
@@ -44,6 +44,7 @@ export async function gateMain(argv: string[]): Promise<number> {
       writer: { type: 'string' },
       escalation: { type: 'string' },
       checker: { type: 'string' },
+      target: { type: 'string' },
       force: { type: 'boolean' },
       ref: { type: 'string' },
       out: { type: 'string' },
@@ -93,6 +94,7 @@ export async function gateMain(argv: string[]): Promise<number> {
         ...(values.writer ? { writer: values.writer } : {}),
         ...(values.escalation ? { escalation: values.escalation } : {}),
         ...(values.checker ? { checker: values.checker } : {}),
+        ...(values.target ? { target: Number(values.target) } : {}),
         ...(values.force ? { force: true } : {}),
       });
       log(`wrote ${r.files.join(', ')}`);

@@ -164,6 +164,9 @@ export function renderProposal(p: RecalibrationProposal, taskPath: string, headP
     `Fitted on ${p.fitRows} calibration rows for ${p.checker.triage === p.checker.verify ? p.checker.verify : `${p.checker.triage} / ${p.checker.verify}`} at ${pct(p.target, 0)}; never on this PR's rows. ` +
       `The lower bound on ${p.checkRows} rows is wide; the point estimate is what the fit targets.`,
   );
+  if (p.checkTooSmall) {
+    out.push('', `⚠️ Only ${p.checkProposed.accepted} held-out rows were auto-accepted: treat the check as a sanity check, not evidence. More calibration rows make it meaningful.`);
+  }
   if (p.restores) {
     out.push('', 'To apply it, commit the new thresholds (that commit goes through this gate too):', '', `\`twopass gate recalibrate --task ${taskPath} --run ${headPath} --write\``);
   }

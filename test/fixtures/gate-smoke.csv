@@ -1,0 +1,121 @@
+id,message,topic
+m000,"case 000: hard, about refund though it mentions delivery",refund
+m001,"case 001: easy, about delivery",delivery
+m002,"case 002: easy, about login",login
+m003,"case 003: easy, about billing",billing
+m004,"case 004: easy, about refund",refund
+m005,"case 005: hard, about delivery though it mentions login",delivery
+m006,"case 006: easy, about login",login
+m007,"case 007: easy, about billing",billing
+m008,"case 008: easy, about refund",refund
+m009,"case 009: easy, about delivery",delivery
+m010,"case 010: hard, about login though it mentions billing",login
+m011,"case 011: easy, about billing",billing
+m012,"case 012: easy, about refund",refund
+m013,"case 013: easy, about delivery",delivery
+m014,"case 014: easy, about login",login
+m015,"case 015: hard, about billing though it mentions refund",billing
+m016,"case 016: easy, about refund",refund
+m017,"case 017: easy, about delivery",delivery
+m018,"case 018: easy, about login",login
+m019,"case 019: easy, about billing",billing
+m020,"case 020: hard, about refund though it mentions delivery",refund
+m021,"case 021: easy, about delivery",delivery
+m022,"case 022: easy, about login",login
+m023,"case 023: easy, about billing",billing
+m024,"case 024: easy, about refund",refund
+m025,"case 025: hard, about delivery though it mentions login",delivery
+m026,"case 026: easy, about login",login
+m027,"case 027: easy, about billing",billing
+m028,"case 028: easy, about refund",refund
+m029,"case 029: easy, about delivery",delivery
+m030,"case 030: hard, about login though it mentions billing",login
+m031,"case 031: easy, about billing",billing
+m032,"case 032: easy, about refund",refund
+m033,"case 033: easy, about delivery",delivery
+m034,"case 034: easy, about login",login
+m035,"case 035: hard, about billing though it mentions refund",billing
+m036,"case 036: easy, about refund",refund
+m037,"case 037: easy, about delivery",delivery
+m038,"case 038: easy, about login",login
+m039,"case 039: easy, about billing",billing
+m040,"case 040: hard, about refund though it mentions delivery",refund
+m041,"case 041: easy, about delivery",delivery
+m042,"case 042: easy, about login",login
+m043,"case 043: easy, about billing",billing
+m044,"case 044: easy, about refund",refund
+m045,"case 045: hard, about delivery though it mentions login",delivery
+m046,"case 046: easy, about login",login
+m047,"case 047: easy, about billing",billing
+m048,"case 048: easy, about refund",refund
+m049,"case 049: easy, about delivery",delivery
+m050,"case 050: hard, about login though it mentions billing",login
+m051,"case 051: easy, about billing",billing
+m052,"case 052: easy, about refund",refund
+m053,"case 053: easy, about delivery",delivery
+m054,"case 054: easy, about login",login
+m055,"case 055: hard, about billing though it mentions refund",billing
+m056,"case 056: easy, about refund",refund
+m057,"case 057: easy, about delivery",delivery
+m058,"case 058: easy, about login",login
+m059,"case 059: easy, about billing",billing
+m060,"case 060: hard, about refund though it mentions delivery",refund
+m061,"case 061: easy, about delivery",delivery
+m062,"case 062: easy, about login",login
+m063,"case 063: easy, about billing",billing
+m064,"case 064: easy, about refund",refund
+m065,"case 065: hard, about delivery though it mentions login",delivery
+m066,"case 066: easy, about login",login
+m067,"case 067: easy, about billing",billing
+m068,"case 068: easy, about refund",refund
+m069,"case 069: easy, about delivery",delivery
+m070,"case 070: hard, about login though it mentions billing",login
+m071,"case 071: easy, about billing",billing
+m072,"case 072: easy, about refund",refund
+m073,"case 073: easy, about delivery",delivery
+m074,"case 074: easy, about login",login
+m075,"case 075: hard, about billing though it mentions refund",billing
+m076,"case 076: easy, about refund",refund
+m077,"case 077: easy, about delivery",delivery
+m078,"case 078: easy, about login",login
+m079,"case 079: easy, about billing",billing
+m080,"case 080: hard, about refund though it mentions delivery",refund
+m081,"case 081: easy, about delivery",delivery
+m082,"case 082: easy, about login",login
+m083,"case 083: easy, about billing",billing
+m084,"case 084: easy, about refund",refund
+m085,"case 085: hard, about delivery though it mentions login",delivery
+m086,"case 086: easy, about login",login
+m087,"case 087: easy, about billing",billing
+m088,"case 088: easy, about refund",refund
+m089,"case 089: easy, about delivery",delivery
+m090,"case 090: hard, about login though it mentions billing",login
+m091,"case 091: easy, about billing",billing
+m092,"case 092: easy, about refund",refund
+m093,"case 093: easy, about delivery",delivery
+m094,"case 094: easy, about login",login
+m095,"case 095: hard, about billing though it mentions refund",billing
+m096,"case 096: easy, about refund",refund
+m097,"case 097: easy, about delivery",delivery
+m098,"case 098: easy, about login",login
+m099,"case 099: easy, about billing",billing
+m100,"case 100: hard, about refund though it mentions delivery",refund
+m101,"case 101: easy, about delivery",delivery
+m102,"case 102: easy, about login",login
+m103,"case 103: easy, about billing",billing
+m104,"case 104: easy, about refund",refund
+m105,"case 105: hard, about delivery though it mentions login",delivery
+m106,"case 106: easy, about login",login
+m107,"case 107: easy, about billing",billing
+m108,"case 108: easy, about refund",refund
+m109,"case 109: easy, about delivery",delivery
+m110,"case 110: hard, about login though it mentions billing",login
+m111,"case 111: easy, about billing",billing
+m112,"case 112: easy, about refund",refund
+m113,"case 113: easy, about delivery",delivery
+m114,"case 114: easy, about login",login
+m115,"case 115: hard, about billing though it mentions refund",billing
+m116,"case 116: easy, about refund",refund
+m117,"case 117: easy, about delivery",delivery
+m118,"case 118: easy, about login",login
+m119,"case 119: easy, about billing",billing

@@ -1,0 +1,166 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`comment > green 1`] = `
+"<!-- twopass-eval-gate:toy -->
+## ✅ Eval gate: toy
+**Auto-accepted rows ≥95% right: lower bound 98.1% ✅**
+
+What the other gates would say: G1 aggregate threshold ✅ · G2 aggregate paired delta ✅
+
+⚠️ No noise file: limits assume unchanged main never moves. Run \`twopass gate noise\` on unchanged main.
+
+### Guardrails (block)
+
+| | base | head | limit | |
+|---|---:|---:|---|:-:|
+| Auto-accepted rows right (Wilson lower bound) | 98.1% | 98.1% | ≥ 95% | ✅ |
+| Labels losing rows beyond noise | | none | per label, min 2 | ✅ |
+| Auto-accepted but wrong | 0 | 0 | +0 | ✅ |
+
+### North Stars (reported, never block)
+
+| | base | head |
+|---|---:|---:|
+| Auto-accepted | 98.0% | 98.0% |
+| Sent to a person | 2.0% | 2.0% |
+| Accuracy, all rows | 98.0% | 98.0% |
+| Auto-accepted rows right | 100.0% | 100.0% |
+| Cost per 1,000 rows (list price) | $1.00 | $1.00 |
+
+<details><summary>This run: cost, time, routing</summary>
+
+- Rows: 200 paired. Answer flips: 0 (right→wrong 0, wrong→right 0).
+- Cost (list price): base $0.200 [], head $0.200 []. Runtime: 1s + 1s.
+- Thresholds: base t0 0.9 / t1 0.9 / t2 0.9; head t0 0.9 / t1 0.9 / t2 0.9.
+- Routing: \`same\`
+- Served: \`chk\`
+- Refs: base \`base\`, head \`head\` (abcdef1)
+</details>
+"
+`;
+
+exports[`comment > red with a recalibration proposal and the trade-off in one line 1`] = `
+"<!-- twopass-eval-gate:toy -->
+## ❌ Eval gate: toy
+**Auto-accepted rows ≥95% right: lower bound 76.9% ❌**
+
+Blocked by G3 promise gate:
+- **promise**: auto-accepted rows ≥95.0% right: lower bound 76.9% (36/40 right)
+- **confident-wrong**: auto-accepted but wrong: 0 → 4 (+4; allowance +0)
+
+What the other gates would say: G1 aggregate threshold ✅ · G2 aggregate paired delta ✅
+
+⚠️ No noise file: limits assume unchanged main never moves. Run \`twopass gate noise\` on unchanged main.
+
+### Guardrails (block)
+
+| | base | head | limit | |
+|---|---:|---:|---|:-:|
+| Auto-accepted rows right (Wilson lower bound) | 98.1% | 76.9% | ≥ 95% | ❌ |
+| Labels losing rows beyond noise | | none | per label, min 2 | ✅ |
+| Auto-accepted but wrong | 0 | 4 | +0 | ❌ |
+
+### North Stars (reported, never block)
+
+| | base | head |
+|---|---:|---:|
+| Auto-accepted | 98.0% | 20.0% |
+| Sent to a person | 2.0% | 80.0% |
+| Accuracy, all rows | 98.0% | 98.0% |
+| Auto-accepted rows right | 100.0% | 90.0% |
+| Cost per 1,000 rows (list price) | $1.00 | $1.00 |
+
+### Recalibration proposal
+
+**The promise holds again on held-out calibration rows; auto-accept goes from 100% to 100%.**
+
+| on 40 held-out calibration rows | current (t0 0.5, t1 0.5, t2 0.5) | proposed (t0 0.7857, t1 0.7712, t2 0.9304) |
+|---|---:|---:|
+| Auto-accepted | 100.0% (40) | 100.0% (40) |
+| Auto-accepted rows right | 82.5% | 100.0% |
+| Wilson 95% lower bound | 68.1% | 91.2% |
+
+Fitted on 160 calibration rows for chk at 95%; never on this PR's rows. The lower bound on 40 rows is wide; the point estimate is what the fit targets.
+
+To apply it, commit the new thresholds (that commit goes through this gate too):
+
+\`twopass gate recalibrate --task gates/toy.task.yaml --run head.json --write\`
+
+<details><summary><b>Rows to read (4)</b>: changed between base and head, the riskiest auto-accepted first</summary>
+
+| # | text | base | head | head status | confidence |
+|---:|---|---|---|---|---:|
+| 1 | text of alpha-000 | zzz | zzz | accepted (new) | 0.91 |
+| 2 | text of beta-000 | zzz | zzz | accepted (new) | 0.91 |
+| 3 | text of delta-000 | zzz | zzz | accepted (new) | 0.91 |
+| 4 | text of gamma-000 | zzz | zzz | accepted (new) | 0.91 |
+
+Gold labels are not shown: these are the rows worth a human look.
+</details>
+
+<details><summary>This run: cost, time, routing</summary>
+
+- Rows: 200 paired. Answer flips: 0 (right→wrong 0, wrong→right 0).
+- Cost (list price): base $0.200 [], head $0.200 []. Runtime: 1s + 1s.
+- Thresholds: base t0 0.9 / t1 0.9 / t2 0.9; head t0 0.9 / t1 0.9 / t2 0.9.
+- Routing: \`same\`
+- Served: \`chk\`
+- Refs: base \`base\`, head \`head\` (abcdef1)
+</details>
+"
+`;
+
+exports[`comment > red without a proposal 1`] = `
+"<!-- twopass-eval-gate:toy -->
+## ❌ Eval gate: toy
+**Auto-accepted rows ≥95% right: lower bound 76.9% ❌**
+
+Blocked by G3 promise gate:
+- **promise**: auto-accepted rows ≥95.0% right: lower bound 76.9% (36/40 right)
+- **confident-wrong**: auto-accepted but wrong: 0 → 4 (+4; allowance +0)
+
+What the other gates would say: G1 aggregate threshold ✅ · G2 aggregate paired delta ✅
+
+⚠️ No noise file: limits assume unchanged main never moves. Run \`twopass gate noise\` on unchanged main.
+
+### Guardrails (block)
+
+| | base | head | limit | |
+|---|---:|---:|---|:-:|
+| Auto-accepted rows right (Wilson lower bound) | 98.1% | 76.9% | ≥ 95% | ❌ |
+| Labels losing rows beyond noise | | none | per label, min 2 | ✅ |
+| Auto-accepted but wrong | 0 | 4 | +0 | ❌ |
+
+### North Stars (reported, never block)
+
+| | base | head |
+|---|---:|---:|
+| Auto-accepted | 98.0% | 20.0% |
+| Sent to a person | 2.0% | 80.0% |
+| Accuracy, all rows | 98.0% | 98.0% |
+| Auto-accepted rows right | 100.0% | 90.0% |
+| Cost per 1,000 rows (list price) | $1.00 | $1.00 |
+
+<details><summary><b>Rows to read (4)</b>: changed between base and head, the riskiest auto-accepted first</summary>
+
+| # | text | base | head | head status | confidence |
+|---:|---|---|---|---|---:|
+| 1 | text of alpha-000 | zzz | zzz | accepted (new) | 0.91 |
+| 2 | text of beta-000 | zzz | zzz | accepted (new) | 0.91 |
+| 3 | text of delta-000 | zzz | zzz | accepted (new) | 0.91 |
+| 4 | text of gamma-000 | zzz | zzz | accepted (new) | 0.91 |
+
+Gold labels are not shown: these are the rows worth a human look.
+</details>
+
+<details><summary>This run: cost, time, routing</summary>
+
+- Rows: 200 paired. Answer flips: 0 (right→wrong 0, wrong→right 0).
+- Cost (list price): base $0.200 [], head $0.200 []. Runtime: 1s + 1s.
+- Thresholds: base t0 0.9 / t1 0.9 / t2 0.9; head t0 0.9 / t1 0.9 / t2 0.9.
+- Routing: \`same\`
+- Served: \`chk\`
+- Refs: base \`base\`, head \`head\` (abcdef1)
+</details>
+"
+`;

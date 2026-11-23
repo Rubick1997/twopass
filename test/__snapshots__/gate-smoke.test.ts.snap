@@ -1,0 +1,39 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`reusable mode, end to end (no network) > init → calibrate → run base/head → compare (red, with proposal) → recalibrate --write → run → compare (green) > task.yaml 1`] = `
+"# TwoPass eval gate task config. Docs: https://github.com/Rubick1997/twopass/blob/main/docs/eval-gate.md
+# Paths are relative to the repo root. Next: twopass gate calibrate --task <this file> --collect --max-usd <cap>
+name: smoke
+type: classification
+data: <repo>/test/fixtures/gate-smoke.csv
+columns:
+  id: id
+  text: message
+  label: topic
+labels: auto
+promise:
+  acceptedPrecision: 0.9
+slice:
+  file: <tmp>/gates/smoke.slice.json
+  perLabel: 20
+  seed: 42
+  exclude:
+    - <tmp>/gates/smoke.calibration-rows.json
+calibration:
+  rows: <tmp>/gates/smoke.calibration-rows.json
+  points: <tmp>/gates/smoke.calibration-points.json
+  checkShare: 0.2
+  seed: 7
+writer:
+  model: claude-haiku-5-5
+  escalation: claude-sonnet-5-5
+checker:
+  model: fake/checker
+  thresholds: <tmp>/gates/smoke.thresholds.json
+gate:
+  enforce: g3
+  maxUsd: 1.5
+  g2Tolerance: 0.01
+noise: <tmp>/gates/smoke.noise.json
+"
+`;

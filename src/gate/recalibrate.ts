@@ -22,11 +22,16 @@ export type RecalibrationProposal =
       checkRows: number;
       /** The proposed thresholds reach the target precision on the check rows. */
       restores: boolean;
+      /** Fewer than MIN_CHECK_ACCEPTED held-out rows were accepted: the check is a sanity check, not evidence. */
+      checkTooSmall: boolean;
       checker: { triage: string; verify: string };
       note?: string;
     }
   | { kind: 'cannot-restore'; reason: string; current: Thresholds; target: number; checkCurrent?: Replay; fitRows?: number; checkRows?: number }
   | { kind: 'needs-points'; reason: string; command: string };
+
+/** Below this many accepted held-out rows, the comment says the check proves little. */
+export const MIN_CHECK_ACCEPTED = 30;
 
 export interface RecalibrateOptions {
   head: GateResult;
@@ -95,6 +100,7 @@ export function proposeRecalibration(o: RecalibrateOptions): RecalibrationPropos
     fitRows: fit.length,
     checkRows: check.length,
     restores,
+    checkTooSmall: checkProposed.accepted < MIN_CHECK_ACCEPTED,
     checker: { triage, verify },
     ...(restores
       ? {}
