@@ -89,7 +89,17 @@ async function main(argv: string[]): Promise<number> {
   }
   if (argv[0] === 'gate') {
     const { gateMain } = await import('./gate/cli.ts');
-    return gateMain(argv.slice(1));
+    try {
+      return await gateMain(argv.slice(1));
+    } catch (err) {
+      // Gate errors are written for people (what is wrong and the command that fixes it): no stack trace.
+      if (err instanceof BudgetExceededError) {
+        console.error(`${err.message}\nRaise the cap, or continue the run: twopass gate run … --resume <runId> --max-usd <n>`);
+        return 2;
+      }
+      console.error(err instanceof Error ? err.message : String(err));
+      return 1;
+    }
   }
   const { values, positionals } = parseArgs({
     args: argv,

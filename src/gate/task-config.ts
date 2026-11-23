@@ -72,6 +72,8 @@ export interface Label {
 
 export interface LoadedGateConfig {
   path: string;
+  /** The path as given (for messages that suggest a command). */
+  given: string;
   config: GateConfig;
 }
 
@@ -91,7 +93,7 @@ export function loadGateConfig(path: string): LoadedGateConfig {
     const lines = parsed.error.issues.map((i) => `  ${i.path.length ? i.path.join('.') : '(top level)'}: ${i.message}`);
     throw new GateConfigError(`${path} is not a valid task config:\n${lines.join('\n')}`);
   }
-  return { path: resolve(path), config: parsed.data };
+  return { path: resolve(path), given: path, config: parsed.data };
 }
 
 export const isGateConfigPath = (p: string): boolean => /\.ya?ml$/i.test(p);
@@ -257,7 +259,7 @@ export function requireThresholds(loaded: LoadedGateConfig, o: { allowMismatch?:
   const triage = config.checker.triage ?? config.checker.model;
   if (!th) {
     throw new GateConfigError(
-      `No thresholds at ${config.checker.thresholds}. Fit them first:\n  twopass gate calibrate --task ${loaded.path}\n` +
+      `No thresholds at ${config.checker.thresholds}. Fit them first:\n  twopass gate calibrate --task ${loaded.given} --collect --max-usd <cap>\n` +
         'The gate never runs on default thresholds.',
     );
   }
@@ -265,7 +267,7 @@ export function requireThresholds(loaded: LoadedGateConfig, o: { allowMismatch?:
     if (o.allowMismatch) return { ...th, mismatch: { fittedFor: th.checker, using: { triage, verify: config.checker.model } } };
     throw new GateConfigError(
       `${config.checker.thresholds} was fitted for ${th.checker.triage} / ${th.checker.verify}, but the task uses ${triage} / ${config.checker.model}. ` +
-        `Recalibrate: twopass gate calibrate --task ${loaded.path}`,
+        `Recalibrate: twopass gate calibrate --task ${loaded.given}`,
     );
   }
   return th;
