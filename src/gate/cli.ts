@@ -18,7 +18,7 @@ export const GATE_USAGE = `twopass gate: a CI gate that enforces the precision p
   twopass gate calibrate --task <file> [--from-run <dir> | --collect] [--models a,b] [--max-usd <n>]
       fits the thresholds the gate runs on, from calibration rows only. Without --max-usd no model is called.
   twopass gate slice --task <file> [--write]              rebuilds the CI slice from the config (no API calls)
-  twopass gate run --task <file> --ref <name> --out <file> [--max-usd <n>] [--limit <n>]
+  twopass gate run --task <file> --ref <name> --out <file> [--max-usd <n>] [--limit <n>] [--resume <runId>]
       runs the CI slice through the full pipeline (sync calls, list price) and writes a result file
   twopass gate noise --task <file> --runs <a.json> <b.json> …    unchanged-main spread → the task's noise file
   twopass gate compare <base.json> <head.json> --task <file> [--gate g1|g2|g3|all] [--comment out.md] [--allow-mixed-routing]
@@ -50,6 +50,7 @@ export async function gateMain(argv: string[]): Promise<number> {
       out: { type: 'string' },
       'max-usd': { type: 'string' },
       limit: { type: 'string' },
+      resume: { type: 'string' },
       runs: { type: 'string', multiple: true },
       'runs-root': { type: 'string' },
       gate: { type: 'string' },
@@ -132,6 +133,7 @@ export async function gateMain(argv: string[]): Promise<number> {
         out: need(values.out, 'out'),
         ...(maxUsd !== undefined ? { maxUsd } : {}),
         ...(limit !== undefined ? { limit } : {}),
+        ...(values.resume ? { resume: values.resume } : {}),
         ...(values['runs-root'] ? { runsRoot: values['runs-root'] } : {}),
         env,
         log,

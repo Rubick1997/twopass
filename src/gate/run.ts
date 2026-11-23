@@ -6,6 +6,7 @@ import { activeProvidersLine, routingKey } from '../batch/route.ts';
 import { bucketsFromAnthropic, bucketsFromOpenRouter, type UsageBuckets } from '../cost/usage.ts';
 import type { LedgerEvent } from '../ledger.ts';
 import { Ledger } from '../ledger.ts';
+import { loadRun } from '../run.ts';
 import { executeRun, startRun } from '../runner.ts';
 import { loadRows, readIdFile, writeJson, writeRunCsv } from './data.ts';
 import type { GateResult, ProviderCost, ResultRow } from './result.ts';
@@ -19,6 +20,8 @@ export interface GateRunOptions {
   runsRoot?: string;
   /** Only the first N slice rows (smoke tests, cost probes). */
   limit?: number;
+  /** Continue an interrupted gate run (its run ID under runsRoot) instead of starting a new one. Nothing is paid twice. */
+  resume?: string;
   env: { openRouterKey?: string; anthropicKey?: string };
   log?: (m: string) => void;
   /** For tests: replaces the run step (no network). */
@@ -52,7 +55,9 @@ export async function gateRun(o: GateRunOptions): Promise<GateResult> {
   const start = o.start ?? startRun;
   const execute = o.execute ?? executeRun;
   const triage = config.checker.triage ?? config.checker.model;
-  const { dir, manifest } = await start({
+  const { dir, manifest } = o.resume
+    ? resumable(join(runsRoot, o.resume), { routes, triage, verify: config.checker.model, thresholds: th.thresholds, rows: ids.length })
+    : await start({
     apiKey: o.env.openRouterKey,
     runsRoot,
     csvPath,
@@ -65,9 +70,10 @@ export async function gateRun(o: GateRunOptions): Promise<GateResult> {
     runIdSuffix: 'gate',
     log,
   });
-  log(`gate run ${manifest.runId}: ${ids.length} rows, cap $${maxUsd} (list price)`);
+  log(`gate run ${manifest.runId}${o.resume ? ' (resumed)' : ''}: ${ids.length} rows, cap $${maxUsd} (list price)`);
   const { outcomes } = await execute(dir, {
     apiKey: o.env.openRouterKey,
+    maxUsdOverride: maxUsd,
     ...(o.env.anthropicKey ? { anthropicApiKey: o.env.anthropicKey } : {}),
     log,
   });
@@ -112,6 +118,25 @@ export async function gateRun(o: GateRunOptions): Promise<GateResult> {
   writeJson(o.out, result);
   log(`wrote ${o.out}: $${result.cost.listUsd.toFixed(4)} list price, ${result.runtimeSec}s`);
   return result;
+}
+
+/** An interrupted gate run may be continued only if it is the same configuration this config would start now. */
+function resumable(
+  dir: string,
+  want: { routes: ReturnType<typeof resolveRoutes>; triage: string; verify: string; thresholds: { t0: number; t1: number; t2: number }; rows: number },
+) {
+  const { manifest } = loadRun(dir);
+  const m = manifest.models;
+  const same =
+    manifest.transport === 'sync' &&
+    m.writer === want.routes.writer.callId &&
+    m.escalation === want.routes.escalation.callId &&
+    m.triage === want.triage &&
+    m.verify === want.verify &&
+    JSON.stringify(manifest.thresholds) === JSON.stringify(want.thresholds) &&
+    manifest.rowCount === want.rows;
+  if (!same) throw new Error(`${dir} is not a gate run of this configuration (models, routing, thresholds or rows differ); start a new run instead.`);
+  return { dir, manifest };
 }
 
 /** The slice must not contain any excluded ID (calibration rows, held-out data). */
