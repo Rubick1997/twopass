@@ -1,0 +1,112 @@
+# TwoPass's own eval gate. Generated from templates/github/eval-gate.yml, with two differences: it builds TwoPass from
+# each commit's source (base runs base's code, head runs head's), and it fetches Banking77's train split.
+# The task goes through gates/banking77.task.yaml, the same path a reader's config takes.
+#
+# Secrets: OPENROUTER_API_KEY (checker), ANTHROPIC_API_KEY (Claude models direct; without it, OpenRouter).
+# Fork PRs get no secrets and are skipped. Never pull_request_target.
+
+name: eval-gate
+
+on:
+  pull_request:
+    paths: ['src/**', 'tasks/**', 'gates/**', 'bench/gate/**', 'package.json', 'pnpm-lock.yaml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: eval-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  TASK: gates/banking77.task.yaml
+  # Cap per side, list price. Projected ≈ $0.70 per side on 1,540 rows with Clef (measured 2026-11-23).
+  MAX_USD: '1.00'
+
+jobs:
+  fork-note:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Eval gate skipped: pull requests from forks get no API keys. A maintainer can run it with workflow_dispatch." >> "$GITHUB_STEP_SUMMARY"
+
+  gate:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha || format('origin/{0}', github.event.repository.default_branch) }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.18'
+      - uses: actions/cache@v4
+        with:
+          path: data/banking77/train.csv
+          key: banking77-train-v1
+
+      - name: Fetch Banking77 (train split only)
+        run: |
+          pnpm install --frozen-lockfile
+          node scripts/fetch-banking77.ts --train-only
+
+      - name: Run base
+        id: base
+        run: |
+          mkdir -p "$RUNNER_TEMP/gate"
+          git checkout --quiet "$BASE_SHA"
+          if [ ! -f "$TASK" ]; then echo "skip=1" >> "$GITHUB_OUTPUT"; echo "Base has no $TASK yet: nothing to compare." >> "$GITHUB_STEP_SUMMARY"; exit 0; fi
+          pnpm install --frozen-lockfile
+          node src/cli.ts gate run --task "$TASK" --ref base --out "$RUNNER_TEMP/gate/base.json" --max-usd "$MAX_USD"
+
+      - name: Run head
+        if: steps.base.outputs.skip != '1'
+        run: |
+          git checkout --quiet "$HEAD_SHA"
+          pnpm install --frozen-lockfile
+          node src/cli.ts gate run --task "$TASK" --ref head --out "$RUNNER_TEMP/gate/head.json" --max-usd "$MAX_USD"
+
+      - name: Compare
+        id: compare
+        if: steps.base.outputs.skip != '1'
+        run: |
+          set +e
+          node src/cli.ts gate compare "$RUNNER_TEMP/gate/base.json" "$RUNNER_TEMP/gate/head.json" --task "$TASK" --comment "$RUNNER_TEMP/gate/comment.md"
+          echo "status=$?" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/gate/comment.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post or update the PR comment
+        if: steps.base.outputs.skip != '1' && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          marker="$(head -n 1 "$RUNNER_TEMP/gate/comment.md")"
+          id="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -n 1)"
+          if [ -n "$id" ]; then
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F "body=@$RUNNER_TEMP/gate/comment.md" > /dev/null
+          else
+            gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/gate/comment.md"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.base.outputs.skip != '1'
+        with:
+          name: eval-gate-results
+          path: ${{ runner.temp }}/gate/
+          if-no-files-found: ignore
+
+      - name: Fail if the enforced gate failed
+        if: steps.base.outputs.skip != '1' && steps.compare.outputs.status != '0'
+        run: exit 1
