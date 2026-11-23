@@ -10,7 +10,7 @@
 // or the environment and are passed to the child processes only.
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 const repo = resolve('.');
@@ -26,7 +26,7 @@ if (!id || !maxUsd) {
   process.exit(1);
 }
 const { candidates } = JSON.parse(readFileSync('bench/gate/experiment/candidates.json', 'utf8')) as {
-  candidates: Array<{ id: string; branch: string; task: string; headFlags?: string[]; baseFlags?: string[]; change: string }>;
+  candidates: Array<{ id: string; branch: string; task: string; headFlags?: string[]; baseFlags?: string[]; change: string; reuseBase?: string }>;
 };
 const c = candidates.find((x) => x.id === id);
 if (!c) throw new Error(`No candidate ${id} in candidates.json`);
@@ -58,6 +58,13 @@ function worktree(name: string, sha: string): string {
 
 function side(name: 'base' | 'head', sha: string, flags: string[]): string {
   const file = join(out, `${name}.json`);
+  // Budget: a candidate may reuse another candidate's base run of the same config (recorded in candidates.json).
+  if (name === 'base' && c!.reuseBase && !existsSync(file)) {
+    const from = join(repo, 'runs', 'gate-exp', c!.reuseBase, 'base.json');
+    if (!existsSync(from)) throw new Error(`reuseBase: ${from} does not exist yet`);
+    copyFileSync(from, file);
+    console.log(`  base: reusing candidate ${c!.reuseBase}'s base run (${from})`);
+  }
   if (existsSync(file)) {
     console.log(`  ${name}: reusing ${file}`);
     return file;
