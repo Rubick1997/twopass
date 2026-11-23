@@ -201,6 +201,13 @@ export function parseOutput(schema: z.ZodType, text: string, answerField?: strin
 }
 
 export async function loadTask(path: string): Promise<TaskDefinition> {
+  // An eval-gate task config (`*.task.yaml`) builds the same TaskDefinition; see src/gate/task-config.ts.
+  if (/\.ya?ml$/i.test(path)) {
+    const { loadGateConfig, taskFromConfig } = await import('./gate/task-config.ts');
+    const task = await taskFromConfig(loadGateConfig(path));
+    validateTask(task);
+    return task;
+  }
   const mod = (await import(pathToFileURL(resolve(path)).href)) as { default?: TaskDefinition };
   if (!mod.default) throw new Error(`${path} has no default export. Export the result of defineTask(...).`);
   validateTask(mod.default);

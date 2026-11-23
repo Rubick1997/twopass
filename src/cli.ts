@@ -67,6 +67,9 @@ const USAGE = `twopass: batch LLM work, checked row by row by a decision model
       refits the round-2 threshold on the calibration fields round 1 did not accept, from data on
       disk, replays the finished test ledgers and rewrites the report (first versions are kept)
 
+  twopass gate <init|calibrate|slice|run|noise|compare|recalibrate> …
+      a CI gate that enforces the precision promise on auto-accepted rows (twopass gate --help)
+
   twopass ui [--runs <dir>] [--port 4777] [--no-open]     no model calls, no cost
       a local web app (127.0.0.1 only) showing every run and bench with live progress;
       with OPENROUTER_API_KEY set it also shows your OpenRouter balance
@@ -83,6 +86,10 @@ async function main(argv: string[]): Promise<number> {
     process.loadEnvFile();
   } catch {
     // no .env (or unreadable): the environment alone is fine
+  }
+  if (argv[0] === 'gate') {
+    const { gateMain } = await import('./gate/cli.ts');
+    return gateMain(argv.slice(1));
   }
   const { values, positionals } = parseArgs({
     args: argv,
