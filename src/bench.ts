@@ -52,6 +52,7 @@ export function parseConfigs(spec: string): BenchConfig[] {
 
 export interface BenchOptions {
   apiKey: string;
+  anthropicApiKey?: string;
   runsRoot: string;
   dataDir: string;
   maxUsd: number;
@@ -74,6 +75,8 @@ export interface BenchOptions {
 }
 
 export interface BenchState {
+  /** Absent in classification benches; `bench vrdu` writes `extract` (see bench-vrdu.ts). */
+  kind?: 'extract';
   benchId: string;
   createdAt: string;
   taskPath: string;
@@ -162,7 +165,7 @@ export async function runBench(o: BenchOptions): Promise<{ benchDir: string; rep
   if (!state.calibrationPath) {
     const calibDir = resolve(o.runsRoot, state.calibrationRunId!);
     o.log(`calibration: collecting on ${state.calibrationSize} train rows (${state.calibrationRunId})`);
-    await executeRun(calibDir, { apiKey: o.apiKey, budget, log: prefix(o.log, 'calib') });
+    await executeRun(calibDir, { apiKey: o.apiKey, ...(o.anthropicApiKey ? { anthropicApiKey: o.anthropicApiKey } : {}), budget, log: prefix(o.log, 'calib') });
     const { path } = await calibrateRun(calibDir, {
       apiKey: o.apiKey,
       models: decisionModels,
@@ -210,6 +213,7 @@ export async function runBench(o: BenchOptions): Promise<{ benchDir: string; rep
   const exec = (c: (typeof all)[number]) =>
     executeRun(resolve(o.runsRoot, state.testRuns[c.name]!), {
       apiKey: o.apiKey,
+      ...(o.anthropicApiKey ? { anthropicApiKey: o.anthropicApiKey } : {}),
       budget,
       ...(o.maxRowsPerBatch ? { maxRowsPerBatch: o.maxRowsPerBatch } : {}),
       log: prefix(o.log, c.name),
@@ -257,7 +261,7 @@ function taskPath(): string {
   return found;
 }
 
-function prefix(log: (m: string) => void, name: string) {
+export function prefix(log: (m: string) => void, name: string) {
   return (m: string) => log(`[${name}] ${m}`);
 }
 
@@ -266,7 +270,8 @@ function hasSpent(dir: string): boolean {
   return existsSync(path) && readFileSync(path, 'utf8').trim().length > 0;
 }
 
-function spentSoFar(runsRoot: string, state: BenchState): number {
+/** Spend recorded in the calibration and test runs' ledgers and score caches (shared with `bench vrdu`). */
+export function spentSoFar(runsRoot: string, state: Pick<BenchState, 'calibrationRunId' | 'testRuns'>): number {
   const ids = [state.calibrationRunId, ...Object.values(state.testRuns)].filter((x): x is string => !!x);
   let total = 0;
   for (const id of ids) {

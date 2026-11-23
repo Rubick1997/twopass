@@ -46,4 +46,28 @@ export function bucketsFromOpenRouter(raw: unknown): UsageBuckets {
   };
 }
 
+const anthropicUsageSchema = z.looseObject({
+  input_tokens: n,
+  output_tokens: n,
+  cache_read_input_tokens: n,
+  cache_creation_input_tokens: n,
+  output_tokens_details: z.looseObject({ thinking_tokens: n }).nullish(),
+});
+
+/**
+ * Anthropic's Messages `usage`. Unlike OpenRouter's `prompt_tokens`, `input_tokens` EXCLUDES cache reads and
+ * cache writes, so the three input counts are separate buckets and add up to the whole prompt.
+ * `output_tokens` includes thinking tokens.
+ */
+export function bucketsFromAnthropic(raw: unknown): UsageBuckets {
+  const u = anthropicUsageSchema.parse(raw ?? {});
+  return {
+    uncachedInput: u.input_tokens ?? 0,
+    cacheRead: u.cache_read_input_tokens ?? 0,
+    cacheWrite: u.cache_creation_input_tokens ?? 0,
+    output: u.output_tokens ?? 0,
+    reasoning: u.output_tokens_details?.thinking_tokens ?? 0,
+  };
+}
+
 export const promptTokens = (b: UsageBuckets): number => b.uncachedInput + b.cacheRead + b.cacheWrite;

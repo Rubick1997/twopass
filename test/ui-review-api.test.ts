@@ -2,8 +2,13 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { readOverrides } from '../src/overrides.ts';
-import { BadRequestError, getReview, getRun, listRuns, NotFoundError, postOutputs, postOverride, topLabels } from '../src/ui/api.ts';
+import { BadRequestError, getReview as getReviewAny, getRun, listRuns, NotFoundError, postOutputs, postOverride as postOverrideAny, topLabels } from '../src/ui/api.ts';
+import type { ClassifyOverrideResponse, ClassifyReviewResponse } from '../src/ui/api-types.ts';
 import { ESCALATION, lockRun, makeRoot, makeRun, MIN, results, reviewRun, submit, T0, triage, WRITER } from './ui-fixtures.ts';
+
+// These runs are closed-choice: narrow the union the API returns.
+const getReview = async (...a: Parameters<typeof getReviewAny>) => (await getReviewAny(...a)) as ClassifyReviewResponse;
+const postOverride = async (...a: Parameters<typeof postOverrideAny>) => (await postOverrideAny(...a)) as ClassifyOverrideResponse;
 
 const at = { now: () => T0 + 20 * MIN, pidAlive: () => false };
 

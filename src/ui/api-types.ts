@@ -166,6 +166,8 @@ export interface BenchConfigSummary {
 
 export interface BenchListItem {
   benchId: string;
+  /** `extract` for `bench vrdu`: no configs, no results explorer; the report is `bench-report.md`. */
+  kind: 'classify' | 'extract';
   createdAt: string;
   status: RunStatus;
   maxUsd: number | null;
@@ -313,7 +315,10 @@ export interface ReviewRow {
   review: ReviewInfo | null;
 }
 
-export interface ReviewResponse {
+/** Closed-choice and open-ended runs (`kind` closed | open) or extraction runs (`kind` extract). */
+export type ReviewResponse = ClassifyReviewResponse | ExtractReviewResponse;
+
+export interface ClassifyReviewResponse {
   runId: string;
   status: RunStatus;
   /** The run's lock is live: new rows may still be flagged. */
@@ -331,13 +336,107 @@ export interface ReviewResponse {
   rows: ReviewRow[];
 }
 
-/** POST /api/runs/:id/overrides */
+/** POST /api/runs/:id/overrides (extraction runs add `field`, and an override's answer may be null) */
 export type DecisionBody =
   | { rowId: string; action: 'accept'; note?: string }
   | { rowId: string; action: 'override'; answer: string; note?: string }
   | { rowId: string; action: 'clear' };
 
-export interface OverrideResponse {
+export type FieldDecisionBody =
+  | { rowId: string; field: string; action: 'accept'; note?: string }
+  /** `answer: null` = "not in this document". */
+  | { rowId: string; field: string; action: 'override'; answer: string | null; note?: string }
+  | { rowId: string; field: string; action: 'clear' };
+
+// ---- extraction runs: one item per field slot
+
+export interface ExtractReviewCounts {
+  /** Field slots in the run. */
+  fields: number;
+  documents: number;
+  /** Fields the pipeline flagged. */
+  flagged: number;
+  reviewed: number;
+  remaining: number;
+  reviewedOther: number;
+  overridden: number;
+}
+
+/** One round's value for a field, as the writer gave it and the checker judged it. */
+export interface FieldRoundInfo {
+  round: 1 | 2;
+  model: string;
+  /** null: the writer says the document does not state the field (or gave no usable reply, see `verdict`). */
+  value: string | null;
+  /** supported | unsupported | cannot_tell | writer_failed | invalid_output */
+  verdict: string;
+  probabilities: { supported: number; unsupported: number; cannot_tell: number } | null;
+  /** [start, end) offsets of the value in the document text; at most 20. */
+  spans: Array<[number, number]>;
+}
+
+export interface FieldReviewInfo {
+  action: ReviewAction;
+  /** null = "not in this document". */
+  value: string | null;
+  previous: string | null;
+  note: string | null;
+  at: string;
+  pipelineStatus: PipelineStatus | null;
+  stale: boolean;
+}
+
+export interface FieldItem {
+  docId: string;
+  field: string;
+  status: FinalStatus;
+  pipelineStatus: PipelineStatus;
+  /** The value the pipeline ended with (kept when flagged). */
+  value: string | null;
+  /** The reviewer's value if any, else `value`. */
+  finalValue: string | null;
+  /** The round that produced `value`. */
+  round: 1 | 2;
+  verdict: string;
+  /** Whether the value can be accepted as it is (the writer gave a usable reply). */
+  acceptable: boolean;
+  round1: FieldRoundInfo | null;
+  round2: FieldRoundInfo | null;
+  /** The gold values (empty list = the form does not state the field); null without a label column. */
+  expected: string[] | null;
+  /** `value` matches the gold, `finalValue` matches the gold; null without a label column. */
+  valueCorrect: boolean | null;
+  finalCorrect: boolean | null;
+  review: FieldReviewInfo | null;
+}
+
+export interface ExtractReviewResponse {
+  kind: 'extract';
+  runId: string;
+  status: RunStatus;
+  running: boolean;
+  filter: ReviewFilter;
+  fields: string[];
+  labelColumn: string | null;
+  maxAnswerChars: number;
+  maxNoteChars: number;
+  counts: ExtractReviewCounts;
+  accuracy: ReviewAccuracy | null;
+  /** Document text by doc id, once per document, for the documents that have an item. */
+  documents: Record<string, string>;
+  items: FieldItem[];
+}
+
+export interface ExtractOverrideResponse {
+  kind: 'extract';
+  item: FieldItem;
+  counts: ExtractReviewCounts;
+  accuracy: ReviewAccuracy | null;
+}
+
+export type OverrideResponse = ClassifyOverrideResponse | ExtractOverrideResponse;
+
+export interface ClassifyOverrideResponse {
   row: ReviewRow;
   counts: ReviewCounts;
   accuracy: ReviewAccuracy | null;
@@ -347,7 +446,7 @@ export interface OverrideResponse {
 export interface OutputsResponse {
   written: string[];
   at: string;
-  counts: ReviewCounts;
+  counts: ReviewCounts | ExtractReviewCounts;
 }
 
 export interface ApiError {
@@ -355,6 +454,102 @@ export interface ApiError {
 }
 
 // ---------------------------------------------------------------- results explorer
+
+/** The pieces of bench-report.json (extraction) that the explorer reads. */
+export interface ExtractSlotMetrics {
+  fields: number;
+  pending: number;
+  accepted: number;
+  acceptedShare: number;
+  precision: number | null;
+  confidentWrong: number;
+  confidentWrongShare: number;
+  flagged: number;
+  flaggedShare: number;
+  flaggedOwnRight: number | null;
+  accuracy: number;
+  exactAccuracy: number;
+}
+export interface ExtractCostStages {
+  write1: number;
+  verify1: number;
+  write2: number;
+  verify2: number;
+  total: number;
+}
+export interface ExtractConfigMetrics extends ExtractSlotMetrics {
+  documents: number;
+  costPer1kDocuments: ExtractCostStages;
+  costPer1kFields: ExtractCostStages;
+}
+export interface ExtractWriterAlone {
+  fields: number;
+  documents: number;
+  unusableDocuments: number;
+  accuracy: number;
+  exactAccuracy: number;
+  costPer1kDocuments: ExtractCostStages;
+  costPer1kFields: ExtractCostStages;
+}
+export interface ExtractReliabilityBin {
+  lo: number;
+  hi: number;
+  n: number;
+  meanP: number;
+  accuracy: number;
+}
+export interface ExtractCannotTell {
+  proposals: number;
+  cannotTell: number;
+  share: number | null;
+}
+export interface ExtractCheckerResult {
+  model: string;
+  threshold: number;
+  slots: number;
+  accepted: number;
+  acceptedShare: number;
+  precision: number | null;
+  confidentWrong: number;
+  cannotTell: { value: ExtractCannotTell; null: ExtractCannotTell };
+  reliability: { eceRaw: number; eceCalibrated: number | null; raw: ExtractReliabilityBin[]; calibrated: ExtractReliabilityBin[] | null };
+}
+export interface ExtractReportData {
+  benchId: string;
+  kind: 'extract';
+  createdAt: string;
+  split: 'dev' | 'test';
+  debugOnly: boolean;
+  documents: number;
+  fields: number;
+  target: number;
+  decisionModel: string;
+  baselineModel: string;
+  thresholds: ExploreThresholds;
+  thresholdsSource: string;
+  configs: { baseline: ExtractConfigMetrics; writerAlone: ExtractWriterAlone; simple: ExtractConfigMetrics; full: ExtractConfigMetrics };
+  presence: Record<'full' | 'simple', { present: ExtractSlotMetrics; absent: ExtractSlotMetrics }>;
+  perField: Record<'full' | 'simple', Record<string, ExtractSlotMetrics>>;
+  checkers: ExtractCheckerResult[];
+  refit: { at: string; previousThresholds: ExploreThresholds; reason: string; fullFirstRead: ExtractConfigMetrics } | null;
+  operatingPoint: { target: number; thresholds: ExploreThresholds; simple: ExtractConfigMetrics; full: ExtractConfigMetrics; checkers: ExtractCheckerResult[] } | null;
+  calibration: {
+    runId: string;
+    documents: number;
+    models: Record<
+      string,
+      {
+        verify1?: { slots: number; wrong: number };
+        verify1Quality?: { auc: number; eceRaw: number; eceCalibrated: number };
+        verify2?: { slots: number; wrong: number };
+        verify2Conditional?: { slots: number; wrong: number };
+      }
+    >;
+  };
+  textCheck: { documents: number; changed: number; changedInside: number; kinds: Record<string, number> } | null;
+  minutes: unknown;
+}
+
 
 export interface ExploreThresholds {
   t0: number;
@@ -440,6 +635,7 @@ export interface ExploreCalibration {
 }
 
 export interface ExploreResponse {
+  kind: 'classify';
   benchId: string;
   /** When the bench started (bench-report.json), for the page title. */
   createdAt: string | null;
@@ -449,5 +645,52 @@ export interface ExploreResponse {
   results: { configs: ExploreConfigResult[] };
   reliability: ExploreReliability[];
   calibration: ExploreCalibration | null;
+  calibrationMissingReason: string | null;
+}
+
+// ---- extraction benches
+
+/** A checker's answer to one proposed field value, reduced to what `verifyOutcome` reads. */
+export interface ExtractChoice {
+  /** supported | unsupported; anything else (cannot_tell, or an answer of another kind) is cannot_tell. */
+  choice: 'supported' | 'unsupported' | 'cannot_tell';
+  /** probabilities.supported (0 when absent). */
+  p: number;
+}
+
+/** One field slot of one calibration document: whether the writers' values were right, and each checker's answers. */
+export interface ExtractSlot {
+  docId: string;
+  field: string;
+  /** The gold label states a value for this field. */
+  goldPresent: boolean;
+  /** The round-1 value is right (false when round 1 gave no usable reply). */
+  correct1: boolean;
+  /** The round-2 value is right; null when round 2 gave no usable reply. */
+  correct2: boolean | null;
+  /** By checker model. null: the checker gave no answer for this slot. */
+  a: Record<string, { r1: ExtractChoice | null; r2: ExtractChoice | null }>;
+}
+
+export interface ExtractExploreCalibration {
+  runId: string;
+  documents: number;
+  /** Checker models that have answers, the decision model first. */
+  models: string[];
+  /** The thresholds in calibration.json at the bench target, per model (for comparison with the live refit). */
+  fitsByModel: Record<string, { verify1?: number; verify2Conditional?: number }>;
+  slots: ExtractSlot[];
+}
+
+/** `report` is the bench's bench-report.json (ExtractReport in src/extract/report.ts). */
+export interface ExtractExploreResponse {
+  kind: 'extract';
+  benchId: string;
+  createdAt: string | null;
+  target: number;
+  decision: string;
+  baselineModel: string | null;
+  report: ExtractReportData;
+  calibration: ExtractExploreCalibration | null;
   calibrationMissingReason: string | null;
 }

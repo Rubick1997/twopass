@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { authHeaders, HttpError, realSleep, requestJson, type FetchFn, type RetryOptions } from '../http.ts';
+import { authHeaders, HttpError, requestJson, type FetchFn, type RetryOptions } from '../http.ts';
+import { waitForTerminalStatus } from './wait.ts';
 import type { BatchHandle, BatchProvider, BatchRequest, BatchResultLine, BatchStatus, WaitOptions } from './provider.ts';
 
 export const BATCHES_URL = 'https://openrouter.ai/api/v1/batches';
@@ -106,31 +107,8 @@ export class OpenRouterBatchProvider implements BatchProvider {
     return decodeBatch(raw);
   }
 
-  async waitForTerminal(id: string, wait: WaitOptions = {}): Promise<BatchStatus> {
-    const sleep = this.opts.sleep ?? realSleep;
-    const now = this.opts.now ?? Date.now;
-    let interval = wait.intervalMs ?? 10_000;
-    const maxInterval = wait.maxIntervalMs ?? 60_000;
-    const notFoundUntil = now() + (this.opts.notFoundGraceMs ?? 180_000);
-    let last: string | undefined;
-    for (;;) {
-      let status: BatchStatus;
-      try {
-        status = await this.poll(id);
-      } catch (err) {
-        // A batch can 404 for a short while right after it is created (seen in the first live run).
-        if (!(err instanceof HttpError) || err.status !== 404 || now() > notFoundUntil) throw err;
-        await sleep(Math.min(interval, 5_000));
-        continue;
-      }
-      if (status.status !== last) {
-        last = status.status;
-        wait.onStatus?.(status.status);
-      }
-      if (status.terminal) return status;
-      await sleep(interval);
-      interval = Math.min(Math.round(interval * 1.5), maxInterval);
-    }
+  waitForTerminal(id: string, wait: WaitOptions = {}): Promise<BatchStatus> {
+    return waitForTerminalStatus(() => this.poll(id), (err) => err instanceof HttpError && err.status === 404, wait, this.opts);
   }
 }
 

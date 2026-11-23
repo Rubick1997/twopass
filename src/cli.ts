@@ -5,8 +5,10 @@ import { DECISION_ALIASES, listBenches, parseConfigs, runBench } from './bench.t
 import { BudgetExceededError } from './budget.ts';
 import { CheckFailedError, checkCsv, DELIMITERS, formatCheckSummary, writeCheckOutputs, type Delimiter } from './check.ts';
 import { NEVER, type StageCalibration } from './calibrate.ts';
+import { documentCorrectness } from './extract/outcomes.ts';
 import { readOverrides } from './overrides.ts';
 import { BatchFailedError, TruncatedOutputError } from './pipeline.ts';
+import { fieldReviewLine, loadFieldReport, writeFieldOutputs } from './extract/review.ts';
 import { costCheckLine, loadReport, reviewLine, summarize, summaryLine, writeOutputs } from './report.ts';
 import { runDir } from './run.ts';
 import {
@@ -45,6 +47,7 @@ const USAGE = `twopass: batch LLM work, checked row by row by a decision model
   twopass report <runId> [--label <column>] [--write]     no model calls, no cost
       summary from the ledger plus the reviewer's decisions (overrides.jsonl)
       --write                rewrite enriched.csv and review.csv from them
+                             (extraction runs: enriched-fields.csv, with a column per decision)
   twopass calibrate <runId> --models jev,clef,luna [--target 0.95] [--max-usd <n>]
   twopass bench banking77 --max-usd <n> [--configs jev,clef,luna,jev+clef]
       [--baseline <model>] [--calibration-size 1000] [--test-size <n>] [--baseline-size <n>]
@@ -52,6 +55,17 @@ const USAGE = `twopass: batch LLM work, checked row by row by a decision model
       --calibration reuses an existing calibration.json and skips the calibration run
       --max-batch-rows sends batches one at a time, so OpenRouter's worst-case
       reservation (every row at max_tokens) stays within your credit balance.
+
+  twopass bench vrdu --split dev|test --max-usd <n> [--decision clef] [--also jev,luna]
+      [--baseline claude-opus-5-5] [--target 0.95] [--id <benchId>] [--max-batch-rows <n>]
+      extraction benchmark on FARA registration forms (6 fields per document): calibrates on the
+      calibration split (--split dev: 15 + 15 dev documents, for debugging only), tests the full
+      pipeline against a frontier baseline, and writes bench-report.md. Needs both
+      OPENROUTER_API_KEY and ANTHROPIC_API_KEY.
+
+  twopass bench vrdu --id <benchId> --refit                 no model calls, no keys, no cost
+      refits the round-2 threshold on the calibration fields round 1 did not accept, from data on
+      disk, replays the finished test ledgers and rewrites the report (first versions are kept)
 
   twopass ui [--runs <dir>] [--port 4777] [--no-open]     no model calls, no cost
       a local web app (127.0.0.1 only) showing every run and bench with live progress;
@@ -64,6 +78,12 @@ const ALIAS_HELP = Object.entries(DECISION_ALIASES)
   .join(', ');
 
 async function main(argv: string[]): Promise<number> {
+  // Keys may live in a gitignored .env in the working directory; real environment variables win.
+  try {
+    process.loadEnvFile();
+  } catch {
+    // no .env (or unreadable): the environment alone is fine
+  }
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
@@ -92,7 +112,10 @@ async function main(argv: string[]): Promise<number> {
       'test-size': { type: 'string' },
       'baseline-size': { type: 'string' },
       'max-batch-rows': { type: 'string' },
+      split: { type: 'string' },
+      also: { type: 'string' },
       id: { type: 'string' },
+      refit: { type: 'boolean' },
       data: { type: 'string' },
       delimiter: { type: 'string' },
       out: { type: 'string' },
@@ -163,11 +186,12 @@ async function main(argv: string[]): Promise<number> {
       });
       log(`run ${manifest.runId} (${manifest.mode}): ${manifest.rowCount} rows → ${dir}`);
       log(`  triage ${manifest.models.triage}, verify ${manifest.models.verify}; thresholds ${fmtThresholds(manifest.thresholds)} from ${manifest.thresholdsSource}`);
-      return execute(dir, apiKey, {});
+      return execute(dir, apiKey, { ...withAnthropicKey() });
     }
     case 'resume': {
       if (!target) throw new UsageError('resume needs <runId>');
       return execute(runDir(runsRoot, target), requireKey(), {
+        ...withAnthropicKey(),
         ...(maxUsd !== undefined ? { maxUsdOverride: maxUsd } : {}),
         allowTaskChange: values['allow-task-change'] ?? false,
       });
@@ -175,8 +199,19 @@ async function main(argv: string[]): Promise<number> {
     case 'report': {
       if (!target) throw new UsageError('report needs <runId>');
       const dir = runDir(runsRoot, target);
-      const { manifest, st, outcomes, overrides, folded } = await loadReport(dir);
-      printSummary(summarize(outcomes, st, values.label ?? manifest.labelColumn, overrides));
+      const { manifest, task, st, outcomes, overrides, folded } = await loadReport(dir);
+      printSummary(summarize(outcomes, st, values.label ?? manifest.labelColumn, overrides, documentCorrectness(task)), !!task.extract);
+      if (task.extract) {
+        // Extraction runs are reviewed per field: progress and accuracy are over field slots.
+        const fields = await loadFieldReport(dir);
+        const line = fieldReviewLine(fields.summary);
+        if (line) console.log(`  review: ${line}`);
+        if (values.write) {
+          writeFieldOutputs(dir, fields);
+          console.log(`wrote ${join(dir, 'enriched-fields.csv')}`);
+        }
+        return 0;
+      }
       if (values.write) {
         writeOutputs(dir, folded, manifest.inputColumns);
         console.log(`wrote ${join(dir, 'enriched.csv')}, ${join(dir, 'review.csv')}`);
@@ -217,10 +252,44 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     case 'bench': {
-      if (target !== 'banking77') throw new UsageError('bench supports one dataset: banking77');
+      if (target === 'vrdu' && values.refit) {
+        // No model calls and no keys: recomputes the calibration from the run's ledger and scores.jsonl, replays the test ledgers.
+        if (!values.id) throw new UsageError('bench vrdu --refit needs --id <benchId>.');
+        const { refitVrduBench } = await import('./bench-vrdu.ts');
+        const { reportPath } = await refitVrduBench({ runsRoot, id: values.id, log });
+        log(`\nreport: ${reportPath}`);
+        return 0;
+      }
+      if (target === 'vrdu') {
+        if (maxUsd === undefined) throw new UsageError('bench vrdu needs --max-usd.');
+        const split = values.split ?? 'test';
+        if (split !== 'dev' && split !== 'test') throw new UsageError('--split must be dev or test');
+        const missing = [['OPENROUTER_API_KEY', process.env.OPENROUTER_API_KEY], ['ANTHROPIC_API_KEY', process.env.ANTHROPIC_API_KEY]].filter(([, v]) => !v).map(([k]) => k);
+        if (missing.length) throw new UsageError(`bench vrdu needs ${missing.join(' and ')} set (OpenRouter runs the checkers, Anthropic runs the writers).`);
+        const { runVrduBench, parseAlso } = await import('./bench-vrdu.ts');
+        const { reportPath } = await runVrduBench({
+          apiKey: process.env.OPENROUTER_API_KEY!,
+          anthropicApiKey: process.env.ANTHROPIC_API_KEY!,
+          runsRoot,
+          dataDir: resolve(values.data ?? 'data'),
+          maxUsd,
+          split,
+          decision: alias(values.decision ?? 'clef')!,
+          also: parseAlso(values.also),
+          baseline: values.baseline ?? 'claude-opus-5-5',
+          target: values.target ? toNumber(values.target, 'target') : 0.95,
+          ...(values['max-batch-rows'] ? { maxRowsPerBatch: toInt(values['max-batch-rows'], 'max-batch-rows') } : {}),
+          ...(values.id ? { id: values.id } : {}),
+          log,
+        });
+        log(`\nreport: ${reportPath}`);
+        return 0;
+      }
+      if (target !== 'banking77') throw new UsageError('bench supports two datasets: banking77, vrdu');
       if (maxUsd === undefined) throw new UsageError('bench needs --max-usd. A full run costs about $10.');
       const { reportPath } = await runBench({
         apiKey: requireKey(),
+        ...withAnthropicKey(),
         runsRoot,
         dataDir: resolve(values.data ?? 'data'),
         maxUsd,
@@ -288,7 +357,7 @@ function openBrowser(url: string): void {
 async function execute(
   dir: string,
   apiKey: string,
-  o: { maxUsdOverride?: number; allowTaskChange?: boolean },
+  o: { anthropicApiKey?: string; maxUsdOverride?: number; allowTaskChange?: boolean },
 ): Promise<number> {
   const runId = dir.split('/').pop();
   process.once('SIGINT', () => {
@@ -297,7 +366,8 @@ async function execute(
   });
   try {
     const { outcomes, st, manifest } = await executeRun(dir, { apiKey, ...o, log: (m) => console.log(m) });
-    printSummary(summarize(outcomes, st, manifest.labelColumn, readOverrides(dir)));
+    const task = await loadTask(manifest.taskPath);
+    printSummary(summarize(outcomes, st, manifest.labelColumn, readOverrides(dir), documentCorrectness(task)));
     console.log(`outputs: ${join(dir, 'enriched.csv')}, ${join(dir, 'review.csv')}`);
     return 0;
   } catch (err) {
@@ -314,9 +384,9 @@ async function execute(
   }
 }
 
-function printSummary(s: ReturnType<typeof summarize>) {
+function printSummary(s: ReturnType<typeof summarize>, extract = false) {
   console.log(`\n${summaryLine(s)}`);
-  const review = reviewLine(s.review);
+  const review = extract ? null : reviewLine(s.review);
   if (review) console.log(`  review: ${review}`);
   for (const r of s.rounds) {
     console.log(`  round ${r.round}: ${r.batches} batch(es), median ${r.medianMinutes.toFixed(1)} min, worst ${r.worstMinutes.toFixed(1)} min`);
@@ -351,6 +421,12 @@ function requireKey(): string {
   const key = process.env.OPENROUTER_API_KEY;
   if (!key) throw new UsageError('Set OPENROUTER_API_KEY first.');
   return key;
+}
+
+/** Set only when ANTHROPIC_API_KEY is: Claude writer models fail with a clear message without it. */
+function withAnthropicKey(): { anthropicApiKey?: string } {
+  const key = process.env.ANTHROPIC_API_KEY;
+  return key ? { anthropicApiKey: key } : {};
 }
 
 class UsageError extends Error {}

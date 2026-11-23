@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { z } from 'zod';
+import { isAnthropicDirect } from './batch/anthropic.ts';
 import { NEVER } from './calibrate.ts';
 import { assertHasCannotTell, CANNOT_TELL, type ChoiceQuestion, type DecisionState } from './decide/model.ts';
 
@@ -64,6 +65,19 @@ export interface TaskDefinition {
     /** Defaults to { input: state(row), proposed_answer }. */
     state?: (row: Row, answer: string) => DecisionState;
   };
+  /**
+   * Extraction tasks: one document per row, several fields per document. The writer's reply is a JSON object
+   * (see `parseExtraction`); the decision model gets one call per document with one question per field.
+   * Not combinable with `triage`.
+   */
+  extract?: {
+    /** Field names, in output order. The writer's reply is a JSON object with exactly these keys, each string | null. */
+    fields: readonly string[];
+    /** The checker's question about one field: a proposed value, or null = "the writer says the document has no such field". Must include cannot_tell. */
+    question: (field: string, value: string | null) => ChoiceQuestion;
+    /** Scoring against the label column (labeled runs only). `label` is the row's label cell. */
+    isCorrect: (field: string, value: string | null, label: string) => boolean;
+  };
   /** `decision` is the default for both triage and verify; either can be set separately. */
   models: { writer: string; escalation: string; decision: string; triage?: string; verify?: string };
   /** Must come from `twopass calibrate` on a held-out split, never from vendor defaults. */
@@ -77,8 +91,16 @@ export function defineTask(task: TaskDefinition): TaskDefinition {
 
 export function validateTask(task: TaskDefinition): void {
   if (task.triage) assertHasCannotTell({ triage: task.triage.question });
-  if (!task.models.writer.endsWith(':batch') || !task.models.escalation.endsWith(':batch')) {
-    throw new Error(`Task "${task.name}": writer and escalation models must be ":batch" model IDs.`);
+  if (task.extract) {
+    if (task.triage) throw new Error(`Task "${task.name}": an extract task cannot have triage.`);
+    if (!task.extract.fields.length) throw new Error(`Task "${task.name}": extract.fields is empty.`);
+    for (const f of task.extract.fields) {
+      assertHasCannotTell({ [`${f} (value)`]: task.extract.question(f, 'x'), [`${f} (null)`]: task.extract.question(f, null) });
+    }
+  }
+  const batchModel = (id: string) => id.endsWith(':batch') || isAnthropicDirect(id);
+  if (!batchModel(task.models.writer) || !batchModel(task.models.escalation)) {
+    throw new Error(`Task "${task.name}": writer and escalation models must be ":batch" OpenRouter IDs or Anthropic model IDs such as "claude-haiku-5-5".`);
   }
   if (task.thresholds) validateThresholds(task.thresholds);
 }
@@ -112,6 +134,34 @@ export function verifyState(task: TaskDefinition, row: Row, answer: string): Dec
 /** Parses a writer reply using the task's answerField and outputSchema. */
 export const parseWriterOutput = (task: TaskDefinition, text: string): ParsedOutput =>
   parseOutput(task.writer.outputSchema, text, task.writer.answerField);
+
+export type ParsedExtraction = { ok: true; values: Record<string, string | null> } | { ok: false; error: string };
+
+/**
+ * Parses an extraction reply: a JSON object with every field of `task.extract.fields`. A value that is empty
+ * or only whitespace counts as null ("not in the document"). Built on `parseWriterOutput`.
+ */
+export function parseExtraction(task: TaskDefinition, text: string): ParsedExtraction {
+  const ex = task.extract;
+  if (!ex) throw new Error(`Task "${task.name}" has no extract block.`);
+  const parsed = parseWriterOutput(task, text);
+  if (!parsed.ok) return parsed;
+  let obj: unknown;
+  try {
+    obj = JSON.parse(parsed.value);
+  } catch {
+    return { ok: false, error: 'reply is not a JSON object' };
+  }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return { ok: false, error: 'reply is not a JSON object' };
+  const values: Record<string, string | null> = {};
+  for (const f of ex.fields) {
+    const v = (obj as Record<string, unknown>)[f];
+    if (v === undefined) return { ok: false, error: `reply has no "${f}"` };
+    if (v !== null && typeof v !== 'string') return { ok: false, error: `"${f}" is not a string or null` };
+    values[f] = v === null || v.trim() === '' ? null : v;
+  }
+  return { ok: true, values };
+}
 
 export function render(template: string, vars: Record<string, string>): string {
   return template.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (_, name: string) => {

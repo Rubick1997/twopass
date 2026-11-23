@@ -40,12 +40,30 @@ export interface ClearRecord {
   rowId: string;
   action: 'clear';
   at: string;
+  /** Extraction runs: the field this undoes. Absent for closed-choice and open-ended tasks. */
+  field?: string;
 }
 
-export type OverrideRecord = ReviewDecision | ClearRecord;
+/**
+ * Extraction runs: a decision about one field of one document. `answer` and `previous` are the field's value, where
+ * null means "this document does not state it". Folded per (rowId, field); classify runs never have these.
+ */
+export interface FieldDecision {
+  rowId: string;
+  field: string;
+  action: ReviewAction;
+  answer: string | null;
+  previous: string | null;
+  note?: string;
+  at: string;
+  pipelineStatus?: RowStatus;
+}
+
+export type OverrideRecord = ReviewDecision | FieldDecision | ClearRecord;
 
 const rowId = z.string().min(1).max(500);
 const at = z.string().min(1);
+const fieldName = z.string().min(1).max(200);
 const recordSchema = z.discriminatedUnion('action', [
   z.object({
     rowId,
@@ -59,16 +77,20 @@ const recordSchema = z.discriminatedUnion('action', [
   z.object({ rowId, action: z.literal('clear'), at }),
 ]);
 
-/** Body of POST /api/runs/:id/overrides. Unknown keys are refused. */
+/**
+ * Body of POST /api/runs/:id/overrides. Unknown keys are refused. `field` is for extraction runs (required there,
+ * refused for other runs: checked against the task), and only then may `answer` be null ("not in this document").
+ */
 export const decisionInputSchema = z.discriminatedUnion('action', [
-  z.strictObject({ rowId, action: z.literal('accept'), note: z.string().max(MAX_NOTE_CHARS).optional() }),
+  z.strictObject({ rowId, field: fieldName.optional(), action: z.literal('accept'), note: z.string().max(MAX_NOTE_CHARS).optional() }),
   z.strictObject({
     rowId,
+    field: fieldName.optional(),
     action: z.literal('override'),
-    answer: z.string().max(MAX_ANSWER_CHARS),
+    answer: z.string().max(MAX_ANSWER_CHARS).nullable(),
     note: z.string().max(MAX_NOTE_CHARS).optional(),
   }),
-  z.strictObject({ rowId, action: z.literal('clear') }),
+  z.strictObject({ rowId, field: fieldName.optional(), action: z.literal('clear') }),
 ]);
 export type DecisionInput = z.infer<typeof decisionInputSchema>;
 
@@ -81,9 +103,24 @@ export function readOverrides(runDir: string): OverrideRecord[] {
   return parseOverrides(readFileSync(path, 'utf8'), path);
 }
 
+const fieldRecordSchema = z.discriminatedUnion('action', [
+  z.object({
+    rowId,
+    field: fieldName,
+    action: z.enum(['accept', 'override']),
+    answer: z.string().nullable(),
+    previous: z.string().nullable(),
+    note: z.string().optional(),
+    at,
+    pipelineStatus: z.enum(['accepted', 'flagged', 'pending']).optional(),
+  }),
+  z.object({ rowId, field: fieldName, action: z.literal('clear'), at }),
+]);
+
 export function parseOverrides(text: string, source = OVERRIDES_FILE): OverrideRecord[] {
   return parseJsonLines(text, source).map((value, i) => {
-    const r = recordSchema.safeParse(value);
+    const isField = typeof value === 'object' && value !== null && 'field' in value;
+    const r = (isField ? fieldRecordSchema : recordSchema).safeParse(value);
     if (!r.success) throw new Error(`${source}: entry ${i + 1} is not a valid override (${r.error.issues[0]?.message ?? 'invalid'})`);
     return r.data as OverrideRecord;
   });
@@ -100,8 +137,23 @@ export function appendOverride(runDir: string, record: OverrideRecord): void {
 export function activeDecisions(records: readonly OverrideRecord[]): Map<string, ReviewDecision> {
   const active = new Map<string, ReviewDecision>();
   for (const r of records) {
+    if ('field' in r && r.field !== undefined) continue; // field decisions belong to extraction runs (activeFieldDecisions)
     if (r.action === 'clear') active.delete(r.rowId);
-    else active.set(r.rowId, r);
+    else active.set(r.rowId, r as ReviewDecision);
+  }
+  return active;
+}
+
+export const fieldKey = (rowId: string, field: string): string => `${rowId}\u0000${field}`;
+
+/** (rowId, field) → its current decision. The last line wins; "clear" removes the decision. Records without a field are ignored. */
+export function activeFieldDecisions(records: readonly OverrideRecord[]): Map<string, FieldDecision> {
+  const active = new Map<string, FieldDecision>();
+  for (const r of records) {
+    if (!('field' in r) || r.field === undefined) continue;
+    const key = fieldKey(r.rowId, r.field);
+    if (r.action === 'clear') active.delete(key);
+    else active.set(key, r as FieldDecision);
   }
   return active;
 }
@@ -167,6 +219,8 @@ export function validateAnswer(task: TaskDefinition, answer: string): string {
  * (undefined when the run has no such row). Accept needs a valid pipeline answer to accept.
  */
 export function makeOverride(input: DecisionInput, outcome: RowOutcome | undefined, task: TaskDefinition, now = new Date()): OverrideRecord {
+  if (task.extract) throw new OverrideError('invalid', 'This is an extraction run: decisions are per field');
+  if (input.field !== undefined) throw new OverrideError('invalid', 'field is only for extraction runs');
   if (!outcome) throw new OverrideError('unknown_row', `This run has no row "${input.rowId.slice(0, 80)}"`);
   const stamp = now.toISOString();
   if (input.action === 'clear') return { rowId: outcome.rowId, action: 'clear', at: stamp };
@@ -181,6 +235,7 @@ export function makeOverride(input: DecisionInput, outcome: RowOutcome | undefin
       throw new OverrideError('invalid', "The pipeline's answer is not a valid answer for this task; override it instead");
     }
   } else {
+    if (input.answer === null) throw new OverrideError('invalid', 'The answer cannot be null for this task');
     answer = validateAnswer(task, input.answer);
   }
   return {
@@ -191,5 +246,51 @@ export function makeOverride(input: DecisionInput, outcome: RowOutcome | undefin
     ...(note ? { note } : {}),
     at: stamp,
     pipelineStatus: outcome.status,
+  };
+}
+
+/** What `makeFieldOverride` needs to know about the field slot's pipeline outcome. */
+export interface FieldPipelineState {
+  status: 'accepted' | 'flagged' | 'pending';
+  value: string | null;
+  /** The writer gave no usable reply, so `value` is a placeholder and cannot be accepted. */
+  unusable: boolean;
+}
+
+/**
+ * Extraction runs: turns a reviewer's request into the line to append. `state` is the slot's pipeline outcome
+ * (undefined when the run has no such document). The field must be one of the task's fields. An override is a
+ * non-empty text up to MAX_ANSWER_CHARS, or null for "not in this document".
+ */
+export function makeFieldOverride(input: DecisionInput, state: FieldPipelineState | undefined, task: TaskDefinition, now = new Date()): OverrideRecord {
+  const ex = task.extract;
+  if (!ex) throw new OverrideError('invalid', 'field is only for extraction runs');
+  if (input.field === undefined) throw new OverrideError('invalid', `This is an extraction run: say which field (one of ${ex.fields.join(', ')})`);
+  if (!ex.fields.includes(input.field)) throw new OverrideError('invalid', `"${input.field.slice(0, 80)}" is not a field of this task (${ex.fields.join(', ')})`);
+  if (!state) throw new OverrideError('unknown_row', `This run has no document "${input.rowId.slice(0, 80)}"`);
+  const stamp = now.toISOString();
+  if (input.action === 'clear') return { rowId: input.rowId, field: input.field, action: 'clear', at: stamp };
+
+  const note = input.note?.trim();
+  let answer: string | null;
+  if (input.action === 'accept') {
+    if (state.status === 'pending' || state.unusable) throw new OverrideError('invalid', 'The pipeline has no value for this field to accept; override it instead');
+    answer = state.value;
+  } else if (input.answer === null) {
+    answer = null;
+  } else {
+    answer = input.answer.trim();
+    if (!answer) throw new OverrideError('invalid', 'The answer is empty; use null for "not in this document"');
+    if (answer.length > MAX_ANSWER_CHARS) throw new OverrideError('invalid', `The answer is longer than ${MAX_ANSWER_CHARS} characters`);
+  }
+  return {
+    rowId: input.rowId,
+    field: input.field,
+    action: input.action,
+    answer,
+    previous: state.value,
+    ...(note ? { note } : {}),
+    at: stamp,
+    pipelineStatus: state.status,
   };
 }

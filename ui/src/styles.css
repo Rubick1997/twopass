@@ -1572,3 +1572,82 @@ tr.baseline-row td {
     font-size: 0.9rem;
   }
 }
+
+/* ---------------------------------------------------------------- extraction review */
+
+:root {
+  --hl1: #fde68a;
+  --hl2: #a5d0ff;
+  --hl12: #b7e4c0;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --hl1: #6b5410;
+    --hl2: #1f4f86;
+    --hl12: #1f5a3a;
+  }
+}
+
+.doc-text {
+  position: relative;
+  max-height: 26rem;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+mark.hl {
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+/* Colour plus a different underline, so the two rounds differ without colour too. */
+mark.hl-r1 {
+  background: var(--hl1);
+  border-bottom: 2px dashed var(--text);
+}
+
+mark.hl-r2 {
+  background: var(--hl2);
+  border-bottom: 2px solid var(--text);
+}
+
+mark.hl-both {
+  /* A colour of its own: a half-and-half gradient read as a rendering glitch on long values. */
+  background: var(--hl12);
+  border-bottom: 2px double var(--text);
+}
+
+.hl-legend {
+  margin: 0 0 8px;
+}
+
+.hl-key {
+  display: inline-block;
+  width: 0.8em;
+  height: 0.8em;
+  border-radius: 2px;
+  vertical-align: baseline;
+}
+
+.hl-key-r1 {
+  background: var(--hl1);
+}
+
+.hl-key-r2 {
+  background: var(--hl2);
+}
+
+.field-value {
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+}

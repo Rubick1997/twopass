@@ -1,3 +1,5 @@
+import type { UsageBuckets } from '../cost/usage.ts';
+
 export interface BatchRequest {
   custom_id: string;
   /** Request body for the batch endpoint, without `model` (the batch sets it). */
@@ -20,6 +22,8 @@ export interface BatchResultLine {
   outputTokens: number;
   /** The provider's `usage` object exactly as returned (cache and reasoning detail), when there was one. */
   usage?: unknown;
+  /** Token buckets the provider adapter already split out (Anthropic direct). When absent, cost is read from `usage` as OpenRouter's. */
+  buckets?: UsageBuckets;
 }
 
 export interface BatchStatus {

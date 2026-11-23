@@ -18,7 +18,7 @@ CSV ──► round 0: triage    decision model picks the answer itself (closed-
         verify ──► ACCEPTED or FLAGGED (human review)
 ```
 
-All model calls go through OpenRouter, using `OPENROUTER_API_KEY`. There is no database: run state is JSONL on disk.
+Decision models and batch models go through OpenRouter, using `OPENROUTER_API_KEY`. Claude writer / escalation models can instead be called directly through Anthropic's Message Batches API (`@anthropic-ai/sdk`, `ANTHROPIC_API_KEY`) by naming them with Anthropic's own ID (`claude-haiku-5-5`, no slash, no `:batch`); `RoutingBatchProvider` picks the provider from the model ID. There is no database: run state is JSONL on disk.
 
 ## Setup
 
@@ -30,9 +30,10 @@ pnpm test            # unit tests, all HTTP mocked, no key needed
 pnpm typecheck
 pnpm build           # compiles to dist/ (the npm bin) and builds the UI into dist/ui
 export OPENROUTER_API_KEY=sk-or-...   # only for commands that call models
+export ANTHROPIC_API_KEY=sk-ant-...   # only when a task names a Claude model by its Anthropic ID
 ```
 
-Never write the key to a file in the repo. Ask the user for it, or have them export it themselves.
+Keys may live in a gitignored `.env` in the repo root (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`), never in a committed file. `cli.ts` loads it with `process.loadEnvFile()` before anything else; real environment variables win. Don't read or print `.env`. Ask the user for a key, or have them put it there themselves.
 
 ## Commands
 
@@ -46,6 +47,8 @@ Run from the repo root with `node src/cli.ts <command>` (or `pnpm twopass <comma
 | `report <runId> [--write]` | Summary from the ledger plus the reviewer's `overrides.jsonl`: review progress and, with labels, accuracy without and with a human. `--write` rewrites `enriched.csv` and `review.csv` from them | no |
 | `calibrate <runId> --models jev,clef,luna` | Fit thresholds on a labeled `--collect` run | yes |
 | `bench banking77 --max-usd N [--calibration file]` | Full benchmark: downloads data, calibrates on train, runs configs on test. `--calibration` reuses an existing `calibration.json` (path recorded in `bench.json` with `calibrationReused: true`, no calibration run, its spend not counted) | yes (~$20–30 full) |
+| `bench vrdu --split dev\|test --max-usd N [--decision clef] [--also jev,luna] [--baseline claude-opus-5-5] [--target 0.95] [--id benchId]` | Extraction benchmark on FARA registration forms (6 fields per document). Writes `data/vrdu/<name>.csv`, calibrates on the calibration split (`--split dev`: 15 + 15 dev documents, **for debugging only**), runs the full pipeline and a frontier baseline on the test split, scores each `--also` checker on the round-1 values, and writes `bench-report.md` / `.json` plus `enriched-fields.csv` in both test run dirs. Needs `OPENROUTER_API_KEY` **and** `ANTHROPIC_API_KEY`. State in `runs/<benchId>/bench.json` with `kind: 'extract'`; resume with `--id`. t2 is fitted on the slots round 1 did not accept (`verify2Conditional`), see "Extract tasks" | yes |
+| `bench vrdu --id <benchId> --refit` | No model calls, no keys: recomputes the calibration from the calibration run's ledger and `scores.jsonl`, refits t2, replays the finished test ledgers and rewrites `bench-report.*` and `enriched-fields.csv`. Keeps `calibration.first.json`, `bench-report.first.md/.json` (never overwritten), records `refit` in `bench.json`; the test runs' manifests and ledgers are not touched | no |
 | `ui [--runs dir] [--port 4777] [--no-open]` | Local web app (127.0.0.1 only) with every run and bench, live, and the review queue for flagged rows. Needs `pnpm build` first | no (only GET `/credits` for the balance, if a key is set) |
 
 **Runs normalize their input.** `run` and `bench` call `checkCsv` (`src/check.ts`) first and refuse to start on any
@@ -130,22 +133,30 @@ src/
   ledger.ts         append-only JSONL event log + replay() → RunState
   overrides.ts      the reviewer's decisions (overrides.jsonl): read, append, validate, foldOverrides (pure)
   report.ts         summary, review summary and accuracy, enriched.csv / review.csv
-  batch/            BatchProvider interface + OpenRouter Batch API client
+  batch/            BatchProvider interface; openrouter.ts (OpenRouter Batch API), anthropic.ts (Anthropic Message Batches, direct),
+                    router.ts (routes by model ID / batch ID), wait.ts (shared poll loop)
   decide/           DecisionModel interface + OpenRouter Decisions API client
   cost/             usage.ts: raw usage → uncached / cache read / cache write / output; price.ts: price those buckets
   task.ts           task definition (prompt, schema, verify question, models, thresholds)
   calibrate.ts      threshold fitting, isotonic calibration, ECE/Brier/AUC (pure)
   score.ts          ledger → (score, p, correct) points per model and stage
-  bench.ts          benchmark orchestration + report
+  bench.ts          benchmark orchestration + report (Banking77)
+  bench-vrdu.ts     `bench vrdu`: calibrate, test + baseline, --also checkers, report (reuses startRun / executeRun / calibrateRun / scoreRun)
   stats.ts          spend by stage, medians (shared by the bench report and the UI)
   lock.ts           run.lock heartbeat (advisory; tells the UI a run is alive)
   ui/               `twopass ui`: api.ts (pure), server.ts (node:http), api-types.ts, models.ts
-  datasets/         Banking77 download
-tasks/              task files (banking77.task.ts)
+  datasets/         Banking77 download; vrdu.ts (FARA registration forms: download, documents.jsonl), vrdu-split.ts (seeded, stratified)
+  extract/          VRDU field normalisation (dates, digits, text) and slot scoring (pure); outcomes.ts (computeFieldOutcomes: per-field
+                    status from the ledger, pure, replayable under any thresholds); report.ts (bench vrdu metrics, markdown, enriched-fields rows; pure)
+  prices-anthropic.ts  pinned batch prices + context length for Anthropic-direct models
+tasks/              task files (banking77.task.ts, vrdu.task.ts)
 ui/                 the browser app (Vite + React, own tsconfig), built to dist/ui
   ui/src/explore.ts        threshold replay + live refit, waffle counts and plain names for the results explorer (pure)
   ui/src/pages/Explore.tsx results explorer page: three tabs, inline SVG charts, no chart library
-scripts/            dataset fetch, contamination check, fake-live-run.ts (UI demo, no cost)
+  ui/src/pages/ExploreExtract.tsx, ui/src/explore-extract.ts   the same for extraction benches (replay is pure)
+  ui/src/pages/ReviewExtract.tsx, ui/src/review-extract.ts     the review page for flagged fields, with the document text highlighted
+bench/vrdu/         splits.json (committed dev / calibration / test document IDs)
+scripts/            dataset fetch (fetch:banking77, fetch:vrdu, split:vrdu), contamination check, fake-live-run.ts (UI demo, no cost)
 test/               vitest, HTTP mocked through test/helpers.ts
 docs-public/        images for the README (docs/ is local-only and gitignored)
 runs/  data/        local only, gitignored
@@ -190,13 +201,48 @@ runs/  data/        local only, gitignored
 | OpenRouter `prompt_tokens` **includes** cache reads (`cached_tokens`) and writes (`cache_write_tokens`); `prompt × input price` is then wrong (48% low on a cache write, 6.4× high on a hit) | `src/cost/` |
 | Batch result rows carry tokens but **no cost**; only the batch has `usage.cost` (`GET /generation?id=` gives per-row cost) | per-row cost is computed, `report` checks it against the billed total |
 | Anthropic caches only prefixes of 512+ tokens and silently skips shorter ones; the usage doesn't say which TTL was written | task `writer.cacheSystem` |
+| Anthropic direct: the `custom_id` rule above still applies; results come out of order | `collectBatch` (same path) |
+| Anthropic direct: batches report **no batch-level cost** (`costUsd: null`); the budget charges the computed per-row sum, priced from pinned batch prices (50% of list) | `src/prices-anthropic.ts`, `collectBatch` |
+| Anthropic's `input_tokens` **excludes** cache reads and writes (OpenRouter's `prompt_tokens` includes them) | `bucketsFromAnthropic`, `BatchResultLine.buckets` |
+| Anthropic batch status `ended` is reported as `completed` (the UI and reports look for it); `terminal` only when ended | `AnthropicBatchProvider.poll` |
+| Anthropic direct gets no prompt-cache markers, no `temperature`/`top_p`/`top_k`/`stream`; the OpenRouter-shaped body is translated and an unknown key throws | `toMessagesParams` |
 
 ## Adding a task
 
 Copy `tasks/banking77.task.ts`. Define `state`, the `writer` prompt with `{{column}}` placeholders, `outputSchema`
 (zod), the `verify` instructions, and the models. List columns that only `state` or `verify.state` read in
 `inputColumns`, so `check` can require them. Add `triage` only for closed-choice tasks. Writer and escalation
-model IDs must end in `:batch`.
+model IDs must end in `:batch` (OpenRouter) or be an Anthropic ID like `claude-haiku-5-5`.
+
+**Extract tasks** (one document per row, several fields per document; see `tasks/vrdu.task.ts`) add an `extract` block:
+`fields`, `question(field, value | null)` (the checker's question about one proposed value, or "the document has no such
+field"; both variants need `cannot_tell`) and `isCorrect(field, value, label)`. Rules: no `triage`; the writer replies with
+one JSON object holding exactly those keys, each a string or `null` (`parseExtraction`; blank counts as null); the decision
+model is called **once per document with one question per field** and the ledger `decision` event's `answers` is keyed by
+field; acceptance is **per field** (`t1` / `t2` stay global per round); the retry is **per document** (round 2 re-extracts the
+whole document with the escalation model, asks only the fields round 1 did not accept, and only those fields take the new
+value; `collect` mode asks every field in both rounds). `computeFieldOutcomes` (`src/extract/outcomes.ts`) is the per-field
+`computeOutcomes`, pure and replayable under any thresholds (`maxRound: 1` is the "simple" writer-checker-person pipeline);
+`computeOutcomes` derives the document-level row from it (answer = JSON of the merged values). `scoreRun` gives one
+calibration point per field slot. The `label` column holds whatever `isCorrect` expects (VRDU: the gold map as JSON);
+`check` validates it as a map of field to list of strings, not against the output schema. A document counts as correct in
+reports when every field is; `acceptedAtRound` in `pipeline.ts` is the one "accepted at round N" test for both task kinds.
+**Round-2 threshold.** Round 2 only decides the fields round 1 did not accept, so t2 is fitted on those: `buildCalibration`
+(`runner.ts`) adds `verify2Conditional` (a normal `StageCalibration`) next to `verify1` / `verify2`, built from the verify2
+slots whose verify1 answer (same model) `verifyOutcome` does not accept at that model's fitted t1 (`unacceptedRound2Points`
+in `score.ts`; a NEVER t1 means every slot). `verify2` stays as the all-slots fit for the record, and
+`thresholdsFromCalibration` uses the conditional fit when present. `operatingPoints['0.98']` holds the verify1 and conditional
+verify2 fits at 98% (refit only, no new calls); the report's `## 98% operating point` replays them. Refit is valid as a replay
+because `verifyRound` and `computeFieldOutcomes` both ask / read verify2 for exactly `unacceptedFields(..., t1)`; only the
+accept decision at t2 changes. `assertReplayable` (`bench-vrdu.ts`) stops if a needed round-2 answer is missing from the ledger.
+The report takes thresholds from `bench.json` `refit.thresholds` when present, else the normal run's manifest.
+**Review and explorer for extract runs.** Decisions are per field: `overrides.jsonl` lines carry `field` (required for extract
+runs, refused for others; an override's answer is text or `null` = "not in this document"), folded per (rowId, field) by
+`foldFieldOverrides` (`src/extract/review.ts`, with the span finder that locates a value in the text). The review uses the thresholds the
+bench report used (`bench.json` `refit.thresholds`, else the manifest's). `report <runId> --write` and the UI's "Write output files"
+rewrite only `enriched-fields.csv`, adding `reviewed_by_human`, `final_value`, `review_note`. The explorer's calibration slots come from
+`scoreRun` in `ledgerOnly` mode (`fieldSlots`); `ui/src/explore-extract.ts` replays them and must stay equal to `computeFieldOutcomes`
+(`test/ui-explore-extract.test.ts`) and refit the thresholds `buildCalibration` stores.
 
 ## Prompt caching
 
@@ -231,4 +277,4 @@ model IDs must end in `:batch`.
 
 ## Before committing
 
-`pnpm test && pnpm typecheck && pnpm build` (`typecheck` covers both `src` and the `ui/` app). Don't commit `runs/`, `data/`, `dist/`, `.env`, or anything containing an API key.
+`pnpm test && pnpm typecheck && pnpm build` (`typecheck` covers both `src` and the `ui/` app). Don't commit `runs/`, `data/` (the VRDU download lives in `data/vrdu/`), `dist/`, `.env`, or anything containing an API key.

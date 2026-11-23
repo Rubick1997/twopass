@@ -1,5 +1,5 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import type { Prices, RowRecord } from './pipeline.ts';
 import type { Row, Thresholds } from './task.ts';
@@ -125,3 +125,32 @@ export function loadRun(dir: string): { manifest: RunManifest; records: RowRecor
     .map((l) => JSON.parse(l) as RowRecord);
   return { manifest, records };
 }
+
+/**
+ * The thresholds a run's outcomes are read with. A `bench vrdu --refit` refits t2 after the first test read and keeps
+ * the new thresholds in bench.json, leaving the test run's manifest alone (the run was made with the old ones). The
+ * run page, `report` and the review must use the refitted ones, or they would not match the bench report. Falls back to
+ * the manifest's.
+ */
+export function effectiveThresholdsInfo(
+  runDir: string,
+  manifest: Pick<RunManifest, 'runId' | 'thresholds' | 'thresholdsSource'>,
+): { thresholds: Thresholds; source: string; refitBench: string | null } {
+  const root = dirname(runDir);
+  try {
+    for (const name of readdirSync(root)) {
+      const path = join(root, name, 'bench.json');
+      if (!name.startsWith('bench-') || !existsSync(path)) continue;
+      const state = JSON.parse(readFileSync(path, 'utf8')) as { kind?: string; testRuns?: Record<string, string>; refit?: { thresholds?: Thresholds } };
+      if (state.kind === 'extract' && state.testRuns?.normal === manifest.runId && state.refit?.thresholds) {
+        return { thresholds: state.refit.thresholds, source: `${manifest.thresholdsSource}; refitted in ${name} after the first test read`, refitBench: name };
+      }
+    }
+  } catch {
+    // an unreadable folder or bench.json: use the manifest's
+  }
+  return { thresholds: manifest.thresholds, source: manifest.thresholdsSource, refitBench: null };
+}
+
+export const effectiveThresholds = (runDir: string, manifest: Pick<RunManifest, 'runId' | 'thresholds' | 'thresholdsSource'>): Thresholds =>
+  effectiveThresholdsInfo(runDir, manifest).thresholds;

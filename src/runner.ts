@@ -1,13 +1,16 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { AnthropicBatchProvider } from './batch/anthropic.ts';
 import { OpenRouterBatchProvider } from './batch/openrouter.ts';
+import { RoutingBatchProvider } from './batch/router.ts';
 import { Budget } from './budget.ts';
-import { calibrateStage, type StageCalibration } from './calibrate.ts';
+import { calibrateStage, NEVER, type StageCalibration, type ThresholdFit } from './calibrate.ts';
 import { OpenRouterDecisionModel } from './decide/openrouter.ts';
-import { Ledger, replay, type RunState } from './ledger.ts';
+import { Ledger, parseLedger, replay, type RunState } from './ledger.ts';
 import { acquireRunLock } from './lock.ts';
 import { executePipeline, type RowOutcome } from './pipeline.ts';
 import { CheckFailedError, checkCsv, formatCheckSummary, writeCheckOutputs } from './check.ts';
+import type { DecisionModel } from './decide/model.ts';
 import type { FetchFn } from './http.ts';
 import { fetchModelList, pricesFrom, type OpenRouterModel } from './prices.ts';
 import { foldOverrides, readOverrides } from './overrides.ts';
@@ -24,7 +27,7 @@ import {
   type RunManifest,
   type RunModels,
 } from './run.ts';
-import { scoreRun, STAGES, type Stage } from './score.ts';
+import { conditionalFit, scoreRun, STAGES, unacceptedRound2Points, type ModelPoints, type Stage } from './score.ts';
 import { loadTask, validateThresholds, type Thresholds } from './task.ts';
 
 export interface StartRunOptions {
@@ -129,6 +132,8 @@ export class TaskChangedError extends Error {}
 
 export interface ExecuteOptions {
   apiKey: string;
+  /** Key for Claude models called directly (writer / escalation IDs like `claude-haiku-5-5`). */
+  anthropicApiKey?: string;
   /** Shared budget (bench). Otherwise one is made from the manifest's cap. */
   budget?: Budget;
   maxUsdOverride?: number;
@@ -184,7 +189,10 @@ async function executeLocked(
     budget,
     triageDecider,
     verifyDecider: manifest.models.verify === manifest.models.triage ? triageDecider : decider(manifest.models.verify),
-    batch: new OpenRouterBatchProvider({ apiKey: o.apiKey }),
+    batch: new RoutingBatchProvider(
+      new OpenRouterBatchProvider({ apiKey: o.apiKey }),
+      o.anthropicApiKey ? new AnthropicBatchProvider({ apiKey: o.anthropicApiKey }) : undefined,
+    ),
     writerModel: manifest.models.writer,
     escalationModel: manifest.models.escalation,
     thresholds: manifest.thresholds,
@@ -205,13 +213,52 @@ async function executeLocked(
 
 // ---------------------------------------------------------------- calibration
 
+/** Extra precision targets an extraction calibration stores fits for (besides the file's `target`). */
+export const EXTRA_TARGETS = [0.98];
+
+/** Fits at another precision target: verify1, and verify2 on the slots that verify1 threshold did not accept. */
+export interface OperatingPoint {
+  verify1: ThresholdFit;
+  verify2Conditional: ThresholdFit & { n: number; correct: number };
+}
+
+export interface ModelCalibration extends Partial<Record<Stage, StageCalibration>> {
+  servedAs?: string[];
+  /**
+   * Extraction tasks: verify2 restricted to the slots the same model's verify1 did not accept at its fitted verify1
+   * threshold (the fields a real run sends to round 2). `verify2` stays as the all-slots fit, for the record.
+   */
+  verify2Conditional?: StageCalibration;
+  /** Extraction tasks: other targets, keyed by the target ("0.98"). */
+  operatingPoints?: Record<string, OperatingPoint>;
+}
+
 export interface CalibrationFile {
   runId: string;
   createdAt: string;
   /** Precision the thresholds were fitted to reach. */
   target: number;
   rows: number;
-  models: Record<string, { servedAs?: string[] } & Partial<Record<Stage, StageCalibration>>>;
+  models: Record<string, ModelCalibration>;
+}
+
+/** Pure: scored points per model -> the calibration file. Extraction models also get the conditional round-2 fit. */
+export function buildCalibration(runId: string, rows: number, target: number, scored: ModelPoints[]): CalibrationFile {
+  const calibration: CalibrationFile = { runId, createdAt: new Date().toISOString(), target, rows, models: {} };
+  for (const s of scored) {
+    const entry: ModelCalibration = {};
+    for (const stage of STAGES) if (s.points[stage].length) entry[stage] = calibrateStage(s.points[stage], target);
+    if (s.verify2Slots) {
+      const t1 = entry.verify1?.fit.threshold ?? NEVER;
+      const conditional = unacceptedRound2Points(s.verify2Slots, t1);
+      if (conditional.length) entry.verify2Conditional = calibrateStage(conditional, target);
+      if (s.points.verify1.length && s.verify2Slots.length) {
+        entry.operatingPoints = Object.fromEntries(EXTRA_TARGETS.map((t) => [String(t), conditionalFit(s.points.verify1, s.verify2Slots!, t)]));
+      }
+    }
+    calibration.models[s.model] = entry;
+  }
+  return calibration;
 }
 
 /**
@@ -241,33 +288,59 @@ export async function calibrateRun(
     ...(o.log ? { log: o.log } : {}),
   });
 
-  const calibration: CalibrationFile = {
-    runId: manifest.runId,
-    createdAt: new Date().toISOString(),
-    target: o.target,
-    rows: records.length,
-    models: {},
-  };
-  for (const s of scored) {
-    const entry: CalibrationFile['models'][string] = {};
-    for (const stage of STAGES) if (s.points[stage].length) entry[stage] = calibrateStage(s.points[stage], o.target);
-    calibration.models[s.model] = entry;
-  }
+  const calibration = buildCalibration(manifest.runId, records.length, o.target, scored);
   const path = join(dir, 'calibration.json');
   writeFileSync(path, JSON.stringify(calibration, null, 2) + '\n');
   return { path, calibration, spentUsd: scored.reduce((n, s) => n + s.spentUsd, 0) };
+}
+
+/** A decision model that must never be asked anything: the refit path has no network client at all. */
+export const noCallModel = (id: string): DecisionModel => ({
+  id,
+  decide: async () => {
+    throw new Error(`refit must not call a model (${id})`);
+  },
+});
+
+/**
+ * Recomputes the calibration of a finished `collect` run from data already on disk: the run's ledger (read without
+ * opening a Ledger, so nothing is repaired or written) and its scores.jsonl cache. Makes no model call; the models
+ * given to scoreRun throw if asked, and `ledgerOnly` means they never are. Does not write the file.
+ */
+export async function refitCalibration(dir: string, o: { models: string[]; target: number }): Promise<CalibrationFile> {
+  const { manifest, records } = loadRun(dir);
+  if (!manifest.labelColumn) throw new Error('Calibration needs a labeled run (--label).');
+  const task = await loadTask(manifest.taskPath);
+  const ledgerPath = join(dir, 'ledger.jsonl');
+  const st = replay(existsSync(ledgerPath) ? parseLedger(readFileSync(ledgerPath, 'utf8'), ledgerPath) : []);
+  const scored = await scoreRun({
+    dir,
+    task,
+    records,
+    labelColumn: manifest.labelColumn,
+    st,
+    runModels: { triage: manifest.models.triage, verify: manifest.models.verify },
+    models: o.models.map(noCallModel),
+    ledgerOnly: true,
+  });
+  return buildCalibration(manifest.runId, records.length, o.target, scored);
 }
 
 export function readCalibration(path: string): CalibrationFile {
   return JSON.parse(readFileSync(path, 'utf8')) as CalibrationFile;
 }
 
-/** t0 from the triage model's triage fit, t1/t2 from the verify model's verify fits. */
+/** t0 from the triage model's triage fit, t1/t2 from the verify model's verify fits (t2: the conditional fit when present). */
 export function thresholdsFromCalibration(c: CalibrationFile, triage: string, verify: string): Thresholds {
   const get = (model: string, stage: Stage) => {
     const fit = c.models[model]?.[stage]?.fit;
     if (!fit) throw new Error(`Calibration ${c.runId} has no ${stage} fit for ${model}. Calibrate with --models including it.`);
     return fit.threshold;
   };
-  return { t0: get(triage, 'triage'), t1: get(verify, 'verify1'), t2: get(verify, 'verify2') };
+  // An extraction task has no triage stage: its model's entry has no triage fit at all, and t0 is unused.
+  const noTriageStage = c.models[triage] !== undefined && c.models[triage]!.triage === undefined && c.models[triage]!.verify1 !== undefined;
+  // Extraction: t2 is fitted on the fields round 1 did not accept, when the calibration has that fit.
+  const t0 = noTriageStage ? NEVER : get(triage, 'triage');
+  const t1 = get(verify, 'verify1');
+  return { t0, t1, t2: c.models[verify]?.verify2Conditional?.fit.threshold ?? get(verify, 'verify2') };
 }

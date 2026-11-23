@@ -2,15 +2,17 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent a
 import type {
   DecisionBody,
   OutputsResponse,
-  OverrideResponse,
+  ClassifyOverrideResponse,
   ReviewFilter,
+  ClassifyReviewResponse,
   ReviewResponse,
   ReviewRow,
 } from '../../../src/ui/api-types.ts';
 import { shortModel } from '../../../src/ui/models.ts';
 import { ProgressBar } from '../components.tsx';
+import { Crumbs, Modal, NoteForm, postJson, readError } from './review-parts.tsx';
+import { ReviewExtract } from './ReviewExtract.tsx';
 import { formatCount, formatPct, formatTime, formatUsd } from '../format.ts';
-import { runHref } from '../hooks.ts';
 import {
   adjustTotals,
   announce,
@@ -31,25 +33,6 @@ import {
 
 const REFRESH_MS = 5000;
 
-async function readError(res: Response): Promise<string> {
-  const text = await res.text();
-  try {
-    return (JSON.parse(text) as { error?: string }).error ?? `HTTP ${res.status}`;
-  } catch {
-    return text.trim() || `HTTP ${res.status}`;
-  }
-}
-
-async function postJson<T>(url: string, body: unknown): Promise<T> {
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(await readError(res));
-  return (await res.json()) as T;
-}
-
 interface SaveError {
   rowId: string;
   message: string;
@@ -58,11 +41,42 @@ interface SaveError {
 
 type Dialog = 'none' | 'override' | 'note' | 'help';
 
+/**
+ * Picks the page by the kind of run. One cheap request first (`filter=reviewed`: only decided items come back), so the
+ * hooks of each page start with the right kind of data.
+ */
 export function ReviewPage({ id }: { id: string }) {
+  const [kind, setKind] = useState<'extract' | 'classify' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    fetch(`/api/runs/${encodeURIComponent(id)}/review?filter=reviewed`, { headers: { Accept: 'application/json' } })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(await readError(res));
+        return (await res.json()) as ReviewResponse;
+      })
+      .then((d) => live && setKind(d.kind === 'extract' ? 'extract' : 'classify'))
+      .catch((err: Error) => live && setError(err.message));
+    return () => {
+      live = false;
+    };
+  }, [id]);
+  if (kind === 'extract') return <ReviewExtract id={id} />;
+  if (kind === 'classify') return <ClassifyReview id={id} />;
+  return (
+    <>
+      <Crumbs id={id} />
+      <h1>Review queue</h1>
+      {error ? <p className="note note-error">{error}</p> : <p className="muted">Loadingâ€¦</p>}
+    </>
+  );
+}
+
+function ClassifyReview({ id }: { id: string }) {
   const base = `/api/runs/${encodeURIComponent(id)}`;
   const [filter, setFilter] = useState<ReviewFilter>('flagged');
   const url = `${base}/review?filter=${filter}`;
-  const [data, setData] = useState<ReviewResponse | null>(null);
+  const [data, setData] = useState<ClassifyReviewResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showLabel, setShowLabel] = useState(false);
@@ -74,7 +88,7 @@ export function ReviewPage({ id }: { id: string }) {
 
   // A poll that started before a write finished may carry old data: it is dropped.
   const writes = useRef({ seq: 0, inFlight: 0 });
-  const dataRef = useRef<ReviewResponse | null>(null);
+  const dataRef = useRef<ClassifyReviewResponse | null>(null);
   dataRef.current = data;
   const filterRef = useRef(filter);
   filterRef.current = filter;
@@ -84,7 +98,7 @@ export function ReviewPage({ id }: { id: string }) {
     try {
       const res = await fetch(url, { headers: { Accept: 'application/json' } });
       if (!res.ok) throw new Error(await readError(res));
-      const next = (await res.json()) as ReviewResponse;
+      const next = (await res.json()) as ClassifyReviewResponse;
       if (writes.current.inFlight || seq !== writes.current.seq || next.filter !== filterRef.current) return;
       setData(next);
       setLoadError(null);
@@ -114,7 +128,7 @@ export function ReviewPage({ id }: { id: string }) {
     if (index >= 0) document.getElementById(`q-${index}`)?.scrollIntoView({ block: 'nearest' });
   }, [index]);
 
-  const replaceRow = (d: ReviewResponse, next: ReviewRow, totals?: Pick<ReviewResponse, 'counts' | 'accuracy'>): ReviewResponse => ({
+  const replaceRow = (d: ClassifyReviewResponse, next: ReviewRow, totals?: Pick<ClassifyReviewResponse, 'counts' | 'accuracy'>): ClassifyReviewResponse => ({
     ...d,
     ...(totals ?? {}),
     rows: d.rows.map((r) => (r.rowId === next.rowId ? next : r)),
@@ -141,7 +155,7 @@ export function ReviewPage({ id }: { id: string }) {
       writes.current.seq++;
       writes.current.inFlight++;
       try {
-        const res = await postJson<OverrideResponse>(`${base}/overrides`, body);
+        const res = await postJson<ClassifyOverrideResponse>(`${base}/overrides`, body);
         setData((cur) => (cur ? replaceRow(cur, res.row, { counts: res.counts, accuracy: res.accuracy }) : cur));
       } catch (err) {
         const message = (err as Error).message || 'Request failed';
@@ -438,14 +452,6 @@ export function ReviewPage({ id }: { id: string }) {
   );
 }
 
-function Crumbs({ id }: { id: string }) {
-  return (
-    <p className="crumbs small">
-      <a href="#/">All runs</a> / <a href={runHref(id)}>{id}</a> / Review
-    </p>
-  );
-}
-
 // ---------------------------------------------------------------- the list
 
 function statusText(r: ReviewRow): { icon: string; text: string } {
@@ -497,7 +503,7 @@ const p2 = (x: number | null | undefined) => (x === null || x === undefined ? 'â
 
 function Detail(props: {
   row: ReviewRow;
-  data: ReviewResponse;
+  data: ClassifyReviewResponse;
   showLabel: boolean;
   onToggleLabel: () => void;
   draftNote: string | undefined;
@@ -688,30 +694,6 @@ function Detail(props: {
 
 // ---------------------------------------------------------------- dialogs
 
-function Modal({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: ReactNode }) {
-  const ref = useRef<HTMLDialogElement>(null);
-  const titleId = useMemo(() => `dlg-${title.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`, [title]);
-  useEffect(() => {
-    const d = ref.current;
-    if (!d) return;
-    if (open && !d.open) d.showModal();
-    if (!open && d.open) d.close();
-  }, [open]);
-  return (
-    <dialog ref={ref} className="modal" aria-labelledby={titleId} onClose={onClose}>
-      <div className="modal-head">
-        <h2 id={titleId} className="card-title">
-          {title}
-        </h2>
-        <button type="button" className="button" onClick={onClose} aria-label="Close">
-          Esc
-        </button>
-      </div>
-      {open && children}
-    </dialog>
-  );
-}
-
 function LabelPicker({ labels, top, current, onPick }: { labels: string[]; top: string[]; current: string; onPick: (label: string) => void }) {
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
@@ -818,37 +800,3 @@ function TextAnswer({ max, initial, onSubmit }: { max: number; initial: string; 
   );
 }
 
-function NoteForm({ max, initial, hasDecision, onSave }: { max: number; initial: string; hasDecision: boolean; onSave: (note: string) => void }) {
-  const [text, setText] = useState(initial);
-  return (
-    <form
-      className="picker"
-      onSubmit={(e) => {
-        e.preventDefault();
-        onSave(text);
-      }}
-    >
-      <label htmlFor="note-input" className="small">
-        {hasDecision ? 'Saved with your decision on this row.' : 'Kept until you accept or override this row, then saved with it.'} Enter saves.
-      </label>
-      <textarea
-        id="note-input"
-        className="text-input"
-        autoFocus
-        rows={3}
-        maxLength={max}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            onSave(text);
-          }
-        }}
-      />
-      <button type="submit" className="button button-primary">
-        Save note
-      </button>
-    </form>
-  );
-}
