@@ -36,6 +36,11 @@ export interface RunManifest {
   input?: { originalSha256: string; normalizedSha256: string; checkReport: string; warnings: number };
   /** Model versions that actually answered, filled in as the run goes. */
   servedModels?: string[];
+  /**
+   * `sync`: writer and escalation calls are made one by one (Messages / chat completions) instead of as batches,
+   * at list price. Absent means batches (every run before the eval gate). Set at creation; resume keeps it.
+   */
+  transport?: 'sync';
 }
 
 export interface RunModels {

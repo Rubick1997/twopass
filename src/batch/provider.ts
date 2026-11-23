@@ -24,6 +24,12 @@ export interface BatchResultLine {
   usage?: unknown;
   /** Token buckets the provider adapter already split out (Anthropic direct). When absent, cost is read from `usage` as OpenRouter's. */
   buckets?: UsageBuckets;
+  /** Who served the call: `anthropic` (direct) or `openrouter`. Set by the sync path. */
+  provider?: 'anthropic' | 'openrouter';
+  /** The model ID the provider reports having served (e.g. a dated snapshot). Set by the sync path. */
+  servedModel?: string;
+  /** OpenRouter only: the upstream it routed to (e.g. "Anthropic", "Amazon Bedrock"). */
+  upstream?: string;
 }
 
 export interface BatchStatus {

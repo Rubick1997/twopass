@@ -202,10 +202,11 @@ runs/  data/        local only, gitignored
 | Batch result rows carry tokens but **no cost**; only the batch has `usage.cost` (`GET /generation?id=` gives per-row cost) | per-row cost is computed, `report` checks it against the billed total |
 | Anthropic caches only prefixes of 512+ tokens and silently skips shorter ones; the usage doesn't say which TTL was written | task `writer.cacheSystem` |
 | Anthropic direct: the `custom_id` rule above still applies; results come out of order | `collectBatch` (same path) |
-| Anthropic direct: batches report **no batch-level cost** (`costUsd: null`); the budget charges the computed per-row sum, priced from pinned batch prices (50% of list) | `src/prices-anthropic.ts`, `collectBatch` |
+| Anthropic direct: batches report **no batch-level cost** (`costUsd: null`); the budget charges the computed per-row sum, priced from pinned list prices (sync) or batch prices (50% of list), cache buckets included | `src/prices-anthropic.ts`, `collectBatch` |
 | Anthropic's `input_tokens` **excludes** cache reads and writes (OpenRouter's `prompt_tokens` includes them) | `bucketsFromAnthropic`, `BatchResultLine.buckets` |
 | Anthropic batch status `ended` is reported as `completed` (the UI and reports look for it); `terminal` only when ended | `AnthropicBatchProvider.poll` |
-| Anthropic direct gets no prompt-cache markers, no `temperature`/`top_p`/`top_k`/`stream`; the OpenRouter-shaped body is translated and an unknown key throws | `toMessagesParams` |
+| Anthropic direct keeps a system part's `cache_control` (and TTL); it gets no `temperature`/`top_p`/`top_k`/`stream` (Haiku 5.5 and Sonnet 5.5 reject non-default sampling values, Opus 5.5 the parameters); the OpenRouter-shaped body is translated and an unknown key throws | `toMessagesParams` |
+| Sync path (eval gate): one call per request behind the `BatchProvider` interface, list prices, no batch-level bill; a batch lost to a crash reports `expired` and its rows are retried | `src/batch/sync.ts`, manifest `transport: 'sync'` |
 
 ## Adding a task
 

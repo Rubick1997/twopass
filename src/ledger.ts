@@ -52,6 +52,10 @@ export interface BatchResultEvent {
   usage?: unknown;
   /** Computed from `usage` and the pinned prices; the batch total the provider billed is on `batch_finished`. */
   costUsd: number;
+  /** Sync path: who served the call, the model ID it reported, and OpenRouter's upstream. */
+  provider?: 'anthropic' | 'openrouter';
+  servedModel?: string;
+  upstream?: string;
   at: string;
 }
 

@@ -1,7 +1,9 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { AnthropicBatchProvider } from './batch/anthropic.ts';
-import { OpenRouterBatchProvider } from './batch/openrouter.ts';
+import { AnthropicBatchProvider, anthropicSyncCaller, isAnthropicDirect } from './batch/anthropic.ts';
+import { OpenRouterBatchProvider, openRouterSyncCaller } from './batch/openrouter.ts';
+import { SyncBatchProvider } from './batch/sync.ts';
+import type { BatchProvider } from './batch/provider.ts';
 import { RoutingBatchProvider } from './batch/router.ts';
 import { Budget } from './budget.ts';
 import { calibrateStage, NEVER, type StageCalibration, type ThresholdFit } from './calibrate.ts';
@@ -44,6 +46,11 @@ export interface StartRunOptions {
   thresholds?: { values: Thresholds; source: string };
   maxUsd?: number;
   runIdSuffix?: string;
+  /**
+   * `sync` (eval gate): writer calls one by one at list price. The writer / escalation IDs must then be the IDs to call:
+   * an Anthropic ID (`claude-haiku-5-5`) or a plain OpenRouter ID (no `:batch`). See `src/batch/route.ts`.
+   */
+  transport?: 'sync';
   /** Prints check warnings before the run starts. */
   log?: (m: string) => void;
   /** For tests: every HTTP call startRun makes (the model list) goes through this. */
@@ -111,7 +118,8 @@ export async function startRun(o: StartRunOptions): Promise<{ dir: string; manif
     models,
     thresholds: thresholds.values,
     thresholdsSource: thresholds.source,
-    prices: pricesFrom(await loadModels(), writerModels),
+    prices: pricesFrom(await loadModels(), writerModels, o.transport ?? 'batch'),
+    ...(o.transport ? { transport: o.transport } : {}),
     ...(o.maxUsd !== undefined ? { maxUsd: o.maxUsd } : {}),
     taskSha256: sha256File(o.taskPath),
     writerCache: task.writer.cacheSystem ?? null,
@@ -189,10 +197,7 @@ async function executeLocked(
     budget,
     triageDecider,
     verifyDecider: manifest.models.verify === manifest.models.triage ? triageDecider : decider(manifest.models.verify),
-    batch: new RoutingBatchProvider(
-      new OpenRouterBatchProvider({ apiKey: o.apiKey }),
-      o.anthropicApiKey ? new AnthropicBatchProvider({ apiKey: o.anthropicApiKey }) : undefined,
-    ),
+    batch: batchProviderFor(manifest, o),
     writerModel: manifest.models.writer,
     escalationModel: manifest.models.escalation,
     thresholds: manifest.thresholds,
@@ -209,6 +214,25 @@ async function executeLocked(
   // decisions, so a run finishing after (or during) review doesn't put reviewed rows back in review.csv.
   writeOutputs(dir, foldOverrides(outcomes, readOverrides(dir)), manifest.inputColumns);
   return { manifest, outcomes, st };
+}
+
+/** Batches (the default) route by ID shape; a `sync` run calls each request directly, through the same router rule. */
+export function batchProviderFor(manifest: Pick<RunManifest, 'transport'>, o: Pick<ExecuteOptions, 'apiKey' | 'anthropicApiKey'>): BatchProvider {
+  if (manifest.transport === 'sync') {
+    const openRouter = openRouterSyncCaller({ apiKey: o.apiKey });
+    const anthropic = o.anthropicApiKey ? anthropicSyncCaller({ apiKey: o.anthropicApiKey }) : undefined;
+    return new SyncBatchProvider({
+      callerFor: (model) => {
+        if (!isAnthropicDirect(model)) return openRouter;
+        if (!anthropic) throw new Error(`Model ${model} uses Anthropic directly: set ANTHROPIC_API_KEY`);
+        return anthropic;
+      },
+    });
+  }
+  return new RoutingBatchProvider(
+    new OpenRouterBatchProvider({ apiKey: o.apiKey }),
+    o.anthropicApiKey ? new AnthropicBatchProvider({ apiKey: o.anthropicApiKey }) : undefined,
+  );
 }
 
 // ---------------------------------------------------------------- calibration
