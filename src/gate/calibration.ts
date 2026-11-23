@@ -40,6 +40,18 @@ export function readCalibrationPoints(path: string): CalibrationPoints | undefin
   return parsed.data as unknown as CalibrationPoints;
 }
 
+/** One line per row label map and per checker stage, so a diff shows which checker or stage changed. */
+export function formatCalibrationPoints(cp: CalibrationPoints): string {
+  const { rows, checkers, ...head } = cp;
+  const lines = Object.entries(head).map(([k, v]) => `  ${JSON.stringify(k)}: ${JSON.stringify(v)}`);
+  lines.push(`  "rows": ${JSON.stringify(rows)}`);
+  const ch = Object.entries(checkers).map(
+    ([m, stages]) => `    ${JSON.stringify(m)}: {\n${Object.entries(stages).map(([s, pts]) => `      ${JSON.stringify(s)}: ${JSON.stringify(pts)}`).join(',\n')}\n    }`,
+  );
+  lines.push(`  "checkers": {\n${ch.join(',\n')}\n  }`);
+  return `{\n${lines.join(',\n')}\n}\n`;
+}
+
 /** scoreRun output (with row IDs) → the points of each checker. */
 export function pointsFromScored(scored: ModelPoints[]): CalibrationPoints['checkers'] {
   const out: CalibrationPoints['checkers'] = {};

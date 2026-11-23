@@ -1,4 +1,5 @@
-import { join, resolve } from 'node:path';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { Budget } from '../budget.ts';
 import { OpenRouterDecisionModel } from '../decide/openrouter.ts';
 import { Ledger, replay } from '../ledger.ts';
@@ -6,7 +7,7 @@ import { loadRun } from '../run.ts';
 import { executeRun, noCallModel, startRun } from '../runner.ts';
 import { scoreRun } from '../score.ts';
 import { loadTask } from '../task.ts';
-import { fitOnRows, pointsFromScored, readCalibrationPoints, replayRows, type CalibrationPoints } from './calibration.ts';
+import { fitOnRows, formatCalibrationPoints, pointsFromScored, readCalibrationPoints, replayRows, type CalibrationPoints } from './calibration.ts';
 import { loadRows, readIdFile, writeJson, writeRunCsv } from './data.ts';
 import { idColumnOf, loadGateConfig, type ThresholdsFile } from './task-config.ts';
 import { resolveRoute } from '../batch/route.ts';
@@ -117,7 +118,8 @@ export async function gateCalibrate(o: GateCalibrateOptions): Promise<{ points: 
     rows: Object.fromEntries(records.map((r) => [r.id, r.data[manifest.labelColumn!] ?? ''])),
     checkers: { ...(sameSource ? previous!.checkers : {}), ...fresh },
   };
-  writeJson(config.calibration.points, points);
+  mkdirSync(dirname(resolve(config.calibration.points)), { recursive: true });
+  writeFileSync(config.calibration.points, formatCalibrationPoints(points));
   log(`wrote ${config.calibration.points}: ${records.length} rows, checkers ${Object.keys(points.checkers).join(', ')}${spentUsd ? `, spent $${spentUsd.toFixed(4)}` : ''}`);
 
   if (o.writeThresholds === false) return { points, spentUsd };
