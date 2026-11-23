@@ -391,6 +391,15 @@ describe('task config', () => {
     expect(() => requireThresholds(loadGateConfig(p))).toThrow(/No thresholds.*\n.*gate calibrate/);
     writeFileSync(join(d, 'th.json'), JSON.stringify({ thresholds: { t0: 0.5, t1: 0.5, t2: 0.5 }, target: 0.95, checker: { triage: 'x', verify: 'x' }, source: 's', fittedAt: 'f' }));
     expect(() => requireThresholds(loadGateConfig(p))).toThrow(/fitted for x \/ x/);
+    // experiments only: the override runs anyway and reports the mismatch
+    const th = requireThresholds(loadGateConfig(p), { allowMismatch: true });
+    expect(th.mismatch).toEqual({ fittedFor: { triage: 'x', verify: 'x' }, using: { triage: 'cloudflare/clef', verify: 'cloudflare/clef' } });
+  });
+  it('the comment warns when a side ran on thresholds fitted for another checker', () => {
+    const hr = makeResult(baseRows, { ref: 'head', thresholdMismatch: { fittedFor: { triage: 'typesafe/jev-1.14', verify: 'typesafe/jev-1.14' }, using: { triage: 'typesafe/jev-1.13', verify: 'typesafe/jev-1.13' } } });
+    const c = compareResults(base, hr);
+    const md = renderComment({ comparison: c, gates: runGates(c, { g2Tolerance: 0.01 }), enforce: 'g3', noise: undefined, proposal: undefined, review: [], base, head: hr, taskPath: 't', headPath: 'h' });
+    expect(md).toContain('⚠️ head ran typesafe/jev-1.13 on thresholds fitted for typesafe/jev-1.14 (`--allow-threshold-mismatch`)');
   });
   it('resolves auto labels from the data, sorted, and refuses duplicates or cannot_tell', () => {
     const d = tmp();

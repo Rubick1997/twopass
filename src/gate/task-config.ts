@@ -246,7 +246,12 @@ export function readThresholdsFile(path: string): ThresholdsFile | undefined {
 }
 
 /** Thresholds for this config, or an error that says how to make them. Never a silent default. */
-export function requireThresholds(loaded: LoadedGateConfig): ThresholdsFile {
+/**
+ * `allowMismatch` (experiments only, `gate run --allow-threshold-mismatch`): run anyway on thresholds fitted for another
+ * checker, and say so in the result. That is what a version bump looks like when the ID check doesn't catch it
+ * (an alias like `jev-latest` whose version changes under the same ID).
+ */
+export function requireThresholds(loaded: LoadedGateConfig, o: { allowMismatch?: boolean } = {}): ThresholdsFile & { mismatch?: { fittedFor: { triage: string; verify: string }; using: { triage: string; verify: string } } } {
   const { config } = loaded;
   const th = readThresholdsFile(config.checker.thresholds);
   const triage = config.checker.triage ?? config.checker.model;
@@ -257,6 +262,7 @@ export function requireThresholds(loaded: LoadedGateConfig): ThresholdsFile {
     );
   }
   if (th.checker.verify !== config.checker.model || th.checker.triage !== triage) {
+    if (o.allowMismatch) return { ...th, mismatch: { fittedFor: th.checker, using: { triage, verify: config.checker.model } } };
     throw new GateConfigError(
       `${config.checker.thresholds} was fitted for ${th.checker.triage} / ${th.checker.verify}, but the task uses ${triage} / ${config.checker.model}. ` +
         `Recalibrate: twopass gate calibrate --task ${loaded.path}`,

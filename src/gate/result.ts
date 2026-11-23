@@ -44,6 +44,8 @@ export interface GateResult {
   promise: { acceptedPrecision: number };
   thresholds: { t0: number; t1: number; t2: number };
   thresholdsSource: string;
+  /** Set when the run used --allow-threshold-mismatch: the thresholds were fitted for another checker. */
+  thresholdMismatch?: { fittedFor: { triage: string; verify: string }; using: { triage: string; verify: string } };
   /** The task has round 0 (the checker picks the label itself); recalibration fits t0 only then. */
   triageStage: boolean;
   models: { writer: string; escalation: string; triage: string; verify: string };

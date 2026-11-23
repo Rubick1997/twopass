@@ -27,6 +27,8 @@ export interface GateCalibrateOptions {
   maxUsd?: number;
   /** Fit and write thresholds for the task's checker (default true). */
   writeThresholds?: boolean;
+  /** Fit at this precision instead of the promise (e.g. 0.93 to automate more). The promise the gate checks doesn't change. */
+  target?: number;
   runsRoot?: string;
   env: { openRouterKey?: string; anthropicKey?: string };
   log?: (m: string) => void;
@@ -123,7 +125,10 @@ export async function gateCalibrate(o: GateCalibrateOptions): Promise<{ points: 
   log(`wrote ${config.calibration.points}: ${records.length} rows, checkers ${Object.keys(points.checkers).join(', ')}${spentUsd ? `, spent $${spentUsd.toFixed(4)}` : ''}`);
 
   if (o.writeThresholds === false) return { points, spentUsd };
-  const target = config.promise.acceptedPrecision;
+  const target = o.target ?? config.promise.acceptedPrecision;
+  if (target !== config.promise.acceptedPrecision) {
+    log(`fitting at ${target}, not the promise's ${config.promise.acceptedPrecision}: the gate still checks ${config.promise.acceptedPrecision}`);
+  }
   const who = { triage, verify, withTriage: !!task.triage };
   const t = fitOnRows(points, { ...who, target, rows: Object.keys(points.rows) });
   const all = replayRows(points, { ...who, rows: Object.keys(points.rows) }, t);

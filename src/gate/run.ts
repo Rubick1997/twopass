@@ -20,6 +20,8 @@ export interface GateRunOptions {
   runsRoot?: string;
   /** Only the first N slice rows (smoke tests, cost probes). */
   limit?: number;
+  /** Experiments only: run on thresholds fitted for another checker, recorded in the result. */
+  allowThresholdMismatch?: boolean;
   /** Continue an interrupted gate run (its run ID under runsRoot) instead of starting a new one. Nothing is paid twice. */
   resume?: string;
   env: { openRouterKey?: string; anthropicKey?: string };
@@ -35,7 +37,10 @@ export async function gateRun(o: GateRunOptions): Promise<GateResult> {
   const started = Date.now();
   const loaded = loadGateConfig(o.taskPath);
   const { config } = loaded;
-  const th = requireThresholds(loaded);
+  const th = requireThresholds(loaded, { allowMismatch: !!o.allowThresholdMismatch });
+  if (th.mismatch) {
+    log(`WARNING: thresholds fitted for ${th.mismatch.fittedFor.triage} / ${th.mismatch.fittedFor.verify}, running ${th.mismatch.using.triage} / ${th.mismatch.using.verify} (--allow-threshold-mismatch)`);
+  }
   const task = await taskFromConfig(loaded);
   if (!o.env.openRouterKey) throw new Error('OPENROUTER_API_KEY is not set: the checker runs on OpenRouter.');
   const routes = resolveRoutes(config, { anthropicKey: !!o.env.anthropicKey });
@@ -107,6 +112,7 @@ export async function gateRun(o: GateRunOptions): Promise<GateResult> {
     thresholds: th.thresholds,
     thresholdsSource: th.source,
     triageStage: !!task.triage,
+    ...(th.mismatch ? { thresholdMismatch: th.mismatch } : {}),
     models: { writer: routes.writer.callId, escalation: routes.escalation.callId, triage, verify: config.checker.model },
     routes: [routes.writer, routes.escalation],
     routingKey: routingKey([routes.writer, routes.escalation]),

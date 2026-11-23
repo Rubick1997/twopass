@@ -51,6 +51,16 @@ export function renderComment(i: CommentInput): string {
   }
   const others = (['g1', 'g2', 'g3'] as const).filter((g) => g !== i.enforce);
   out.push('', `What the other gates would say: ${others.map((g) => `${gates[g].name} ${ok(gates[g].pass)}`).join(' · ')}`);
+  for (const [side, r] of [['base', i.base], ['head', i.head]] as const) {
+    const m = r.thresholdMismatch;
+    if (m) {
+      out.push(
+        '',
+        `⚠️ ${side} ran ${m.using.verify === m.using.triage ? m.using.verify : `${m.using.triage} / ${m.using.verify}`} on thresholds fitted for ` +
+          `${m.fittedFor.verify === m.fittedFor.triage ? m.fittedFor.verify : `${m.fittedFor.triage} / ${m.fittedFor.verify}`} (\`--allow-threshold-mismatch\`). Without the flag the gate refuses this run.`,
+      );
+    }
+  }
   if (!c.routing.same) out.push('', `⚠️ Base and head used different routing; the comparison mixes providers.\n- base: \`${c.routing.base}\`\n- head: \`${c.routing.head}\``);
   if (!i.noise) out.push('', '⚠️ No noise file: limits assume unchanged main never moves. Run `twopass gate noise` on unchanged main.');
   if (c.onlyBase.length || c.onlyHead.length) out.push('', `Rows only in base: ${c.onlyBase.length}, only in head: ${c.onlyHead.length} (left out of the comparison).`);

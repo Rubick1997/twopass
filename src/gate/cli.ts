@@ -15,10 +15,11 @@ export const GATE_USAGE = `twopass gate: a CI gate that enforces the precision p
   twopass gate init --data <csv> --text <col> --label <col> [--id <col>] [--name <name>]
       [--per-label 20] [--calibration-per-label 15] [--target 0.95] [--writer …] [--escalation …] [--checker …] [--force]
       writes gates/<name>.task.yaml, the calibration rows, the CI slice and .github/workflows/eval-gate.yml (no API calls)
-  twopass gate calibrate --task <file> [--from-run <dir> | --collect] [--models a,b] [--max-usd <n>]
+  twopass gate calibrate --task <file> [--from-run <dir> | --collect] [--models a,b] [--target 0.95] [--max-usd <n>]
       fits the thresholds the gate runs on, from calibration rows only. Without --max-usd no model is called.
   twopass gate slice --task <file> [--write]              rebuilds the CI slice from the config (no API calls)
   twopass gate run --task <file> --ref <name> --out <file> [--max-usd <n>] [--limit <n>] [--resume <runId>]
+      [--allow-threshold-mismatch]   experiments only: run on thresholds fitted for another checker (recorded, warned)
       runs the CI slice through the full pipeline (sync calls, list price) and writes a result file
   twopass gate noise --task <file> --runs <a.json> <b.json> …    unchanged-main spread → the task's noise file
   twopass gate compare <base.json> <head.json> --task <file> [--gate g1|g2|g3|all] [--comment out.md] [--allow-mixed-routing]
@@ -51,6 +52,7 @@ export async function gateMain(argv: string[]): Promise<number> {
       'max-usd': { type: 'string' },
       limit: { type: 'string' },
       resume: { type: 'string' },
+      'allow-threshold-mismatch': { type: 'boolean' },
       runs: { type: 'string', multiple: true },
       'runs-root': { type: 'string' },
       gate: { type: 'string' },
@@ -119,6 +121,7 @@ export async function gateMain(argv: string[]): Promise<number> {
         ...(values.models ? { models: values.models.split(',').map((m) => m.trim()).filter(Boolean) } : {}),
         ...(maxUsd !== undefined ? { maxUsd } : {}),
         ...(values['runs-root'] ? { runsRoot: values['runs-root'] } : {}),
+        ...(values.target ? { target: Number(values.target) } : {}),
         env,
         log,
       });
@@ -134,6 +137,7 @@ export async function gateMain(argv: string[]): Promise<number> {
         ...(maxUsd !== undefined ? { maxUsd } : {}),
         ...(limit !== undefined ? { limit } : {}),
         ...(values.resume ? { resume: values.resume } : {}),
+        ...(values['allow-threshold-mismatch'] ? { allowThresholdMismatch: true } : {}),
         ...(values['runs-root'] ? { runsRoot: values['runs-root'] } : {}),
         env,
         log,
