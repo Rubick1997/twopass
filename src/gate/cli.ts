@@ -146,7 +146,7 @@ export async function gateMain(argv: string[]): Promise<number> {
       writeJson(config.noise, noise);
       const m = noise.metrics;
       log(`wrote ${config.noise} from ${noise.runs} runs`);
-      log(`  accuracy ${pct(m.accuracy.min)}–${pct(m.accuracy.max)}; auto-accepted right ${pct(m.acceptedPrecision.min)}–${pct(m.acceptedPrecision.max)}; lower bound spread ${(100 * m.acceptedLower.spread).toFixed(1)} pts`);
+      log(`  accuracy ${pct(m.accuracy.min)}–${pct(m.accuracy.max)}; auto-accepted right ${pct(m.acceptedPrecision.min)}–${pct(m.acceptedPrecision.max)}; precision spread ${(100 * m.acceptedPrecision.spread).toFixed(1)} pts`);
       log(`  auto-accepted ${pct(m.acceptShare.min)}–${pct(m.acceptShare.max)}; confident-wrong ${m.confidentWrong.min}–${m.confidentWrong.max}; answer flips between runs ≤ ${noise.maxAnswerFlips}; identical rows ${pct(noise.identicalShare)}`);
       return 0;
     }

@@ -7,7 +7,10 @@ import { bootstrapMeanDelta } from './stats.ts';
 //
 // G1  aggregate threshold:   head accuracy ≥ lowest of the noise runs − 0.5 points
 // G2  aggregate paired delta: bootstrap 95% lower bound of (head − base) accuracy ≥ −tolerance
-// G3  the promise:            (1) head accepted-precision Wilson lower bound ≥ target − noise allowance
+// G3  the promise:            (1) head accepted precision ≥ target − noise allowance (point estimate), AND head is not
+//                                 clearly worse than base (head's Wilson 95% upper bound ≥ base's point estimate).
+//                                 Not "lower bound ≥ target": with true precision at the target (Clef ≈ 95%, Banking77)
+//                                 a 1,540-row slice gives a lower bound near 94%, so unchanged main would always fail.
 //                             (2) no label loses more rows (net right→wrong) than unchanged main does, min 2
 //                             (3) confident-wrong count doesn't rise more than unchanged main moves
 
@@ -76,7 +79,7 @@ export function gateG2(c: Comparison, o: GateOptions): GateOutcome {
 /** Allowances G3 takes from the noise file (0 without one). */
 export function noiseAllowances(noise: NoiseFile | undefined) {
   return {
-    acceptedLower: noise ? noise.metrics.acceptedLower.spread : 0,
+    acceptedPrecision: noise ? noise.metrics.acceptedPrecision.spread : 0,
     confidentWrong: noise ? noise.metrics.confidentWrong.spread : 0,
   };
 }
@@ -84,8 +87,11 @@ export function noiseAllowances(noise: NoiseFile | undefined) {
 export function gateG3(c: Comparison, o: GateOptions): GateOutcome {
   const allow = noiseAllowances(o.noise);
   const target = c.promise;
-  const lower = c.head.acceptedPrecision.lower;
-  const promiseOk = lower >= target - allow.acceptedLower;
+  const head = c.head.acceptedPrecision;
+  const floor = target - allow.acceptedPrecision;
+  const aboveFloor = head.point >= floor;
+  const notWorse = head.upper >= c.base.acceptedPrecision.point;
+  const promiseOk = aboveFloor && notWorse;
 
   const broken = c.labels.filter((l) => l.netLoss > labelLimit(o.noise, l.label));
   const cwRise = c.head.confidentWrong - c.base.confidentWrong;
@@ -100,8 +106,9 @@ export function gateG3(c: Comparison, o: GateOptions): GateOutcome {
         check: 'promise',
         pass: promiseOk,
         detail:
-          `auto-accepted rows ≥${pts(target)} right: lower bound ${pts(lower)} (${c.head.acceptedPrecision.k}/${c.head.acceptedPrecision.n} right` +
-          `${allow.acceptedLower ? `, noise allowance ${(100 * allow.acceptedLower).toFixed(1)} pts` : ''})`,
+          `auto-accepted rows ${pts(head.point)} right (${head.k}/${head.n}; 95% CI ${pts(head.lower)}–${pts(head.upper)}); ` +
+          `must be ≥ ${pts(floor)}${allow.acceptedPrecision ? ` (${pts(target)} − ${(100 * allow.acceptedPrecision).toFixed(1)} pts noise)` : ''} ${aboveFloor ? 'ok' : 'FAILED'}` +
+          ` and not clearly below base's ${pts(c.base.acceptedPrecision.point)} ${notWorse ? 'ok' : 'FAILED'}`,
       },
       {
         check: 'labels',

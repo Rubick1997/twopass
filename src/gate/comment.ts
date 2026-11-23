@@ -42,7 +42,7 @@ export function renderComment(i: CommentInput): string {
 
   out.push(`## ${ok(enforced.pass)} Eval gate: ${c.task}`);
   out.push(
-    `**Auto-accepted rows ≥${pct(c.promise, 0)} right: lower bound ${pct(c.head.acceptedPrecision.lower)} ${ok(promiseReason.pass)}**` +
+    `**Auto-accepted rows ≥${pct(c.promise, 0)} right: ${pct(c.head.acceptedPrecision.point)} (95% CI ${pct(c.head.acceptedPrecision.lower)}–${pct(c.head.acceptedPrecision.upper)}) ${ok(promiseReason.pass)}**` +
       (i.enforce === 'g3' ? '' : ` · enforced gate: ${enforced.name} ${ok(enforced.pass)}`),
   );
   if (!enforced.pass) {
@@ -63,7 +63,7 @@ export function renderComment(i: CommentInput): string {
     '',
     '| | base | head | limit | |',
     '|---|---:|---:|---|:-:|',
-    `| Auto-accepted rows right (Wilson lower bound) | ${pct(c.base.acceptedPrecision.lower)} | ${pct(c.head.acceptedPrecision.lower)} | ≥ ${pct(c.promise, 0)}${allow.acceptedLower ? ` − ${(100 * allow.acceptedLower).toFixed(1)} pts noise` : ''} | ${ok(promiseReason.pass)} |`,
+    `| Auto-accepted rows right | ${pct(c.base.acceptedPrecision.point)} | ${pct(c.head.acceptedPrecision.point)} (CI ${pct(c.head.acceptedPrecision.lower)}–${pct(c.head.acceptedPrecision.upper)}) | ≥ ${pct(c.promise, 0)}${allow.acceptedPrecision ? ` − ${(100 * allow.acceptedPrecision).toFixed(1)} pts noise` : ''}, and not clearly below base | ${ok(promiseReason.pass)} |`,
     `| Labels losing rows beyond noise | | ${broken.length ? broken.map((l) => `${cell(l.label)} −${l.netLoss}`).join(', ') : 'none'} | per label, min 2 | ${ok(!broken.length)} |`,
     `| Auto-accepted but wrong | ${c.base.confidentWrong} | ${c.head.confidentWrong} | +${allow.confidentWrong} | ${ok(g3.reasons.find((r) => r.check === 'confident-wrong')!.pass)} |`,
   );
@@ -78,7 +78,6 @@ export function renderComment(i: CommentInput): string {
     `| Auto-accepted | ${pct(c.base.acceptShare)} | ${pct(c.head.acceptShare)} |`,
     `| Sent to a person | ${pct(c.base.sentToPersonShare)} | ${pct(c.head.sentToPersonShare)} |`,
     `| Accuracy, all rows | ${pct(c.base.accuracy)} | ${pct(c.head.accuracy)} |`,
-    `| Auto-accepted rows right | ${pct(c.base.acceptedPrecision.point)} | ${pct(c.head.acceptedPrecision.point)} |`,
     `| Cost per 1,000 rows (list price) | ${usd(c.base.costPer1k)} | ${usd(c.head.costPer1k)} |`,
   );
 

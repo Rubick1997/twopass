@@ -3,7 +3,7 @@
 exports[`comment > green 1`] = `
 "<!-- twopass-eval-gate:toy -->
 ## ✅ Eval gate: toy
-**Auto-accepted rows ≥95% right: lower bound 98.1% ✅**
+**Auto-accepted rows ≥95% right: 100.0% (95% CI 98.1%–100.0%) ✅**
 
 What the other gates would say: G1 aggregate threshold ✅ · G2 aggregate paired delta ✅
 
@@ -13,7 +13,7 @@ What the other gates would say: G1 aggregate threshold ✅ · G2 aggregate paire
 
 | | base | head | limit | |
 |---|---:|---:|---|:-:|
-| Auto-accepted rows right (Wilson lower bound) | 98.1% | 98.1% | ≥ 95% | ✅ |
+| Auto-accepted rows right | 100.0% | 100.0% (CI 98.1%–100.0%) | ≥ 95%, and not clearly below base | ✅ |
 | Labels losing rows beyond noise | | none | per label, min 2 | ✅ |
 | Auto-accepted but wrong | 0 | 0 | +0 | ✅ |
 
@@ -24,7 +24,6 @@ What the other gates would say: G1 aggregate threshold ✅ · G2 aggregate paire
 | Auto-accepted | 98.0% | 98.0% |
 | Sent to a person | 2.0% | 2.0% |
 | Accuracy, all rows | 98.0% | 98.0% |
-| Auto-accepted rows right | 100.0% | 100.0% |
 | Cost per 1,000 rows (list price) | $1.00 | $1.00 |
 
 <details><summary>This run: cost, time, routing</summary>
@@ -42,10 +41,10 @@ What the other gates would say: G1 aggregate threshold ✅ · G2 aggregate paire
 exports[`comment > red with a recalibration proposal and the trade-off in one line 1`] = `
 "<!-- twopass-eval-gate:toy -->
 ## ❌ Eval gate: toy
-**Auto-accepted rows ≥95% right: lower bound 76.9% ❌**
+**Auto-accepted rows ≥95% right: 90.0% (95% CI 76.9%–96.0%) ❌**
 
 Blocked by G3 promise gate:
-- **promise**: auto-accepted rows ≥95.0% right: lower bound 76.9% (36/40 right)
+- **promise**: auto-accepted rows 90.0% right (36/40; 95% CI 76.9%–96.0%); must be ≥ 95.0% FAILED and not clearly below base's 100.0% FAILED
 - **confident-wrong**: auto-accepted but wrong: 0 → 4 (+4; allowance +0)
 
 What the other gates would say: G1 aggregate threshold ✅ · G2 aggregate paired delta ✅
@@ -56,7 +55,7 @@ What the other gates would say: G1 aggregate threshold ✅ · G2 aggregate paire
 
 | | base | head | limit | |
 |---|---:|---:|---|:-:|
-| Auto-accepted rows right (Wilson lower bound) | 98.1% | 76.9% | ≥ 95% | ❌ |
+| Auto-accepted rows right | 100.0% | 90.0% (CI 76.9%–96.0%) | ≥ 95%, and not clearly below base | ❌ |
 | Labels losing rows beyond noise | | none | per label, min 2 | ✅ |
 | Auto-accepted but wrong | 0 | 4 | +0 | ❌ |
 
@@ -67,7 +66,6 @@ What the other gates would say: G1 aggregate threshold ✅ · G2 aggregate paire
 | Auto-accepted | 98.0% | 20.0% |
 | Sent to a person | 2.0% | 80.0% |
 | Accuracy, all rows | 98.0% | 98.0% |
-| Auto-accepted rows right | 100.0% | 90.0% |
 | Cost per 1,000 rows (list price) | $1.00 | $1.00 |
 
 ### Recalibration proposal
@@ -113,10 +111,10 @@ Gold labels are not shown: these are the rows worth a human look.
 exports[`comment > red without a proposal 1`] = `
 "<!-- twopass-eval-gate:toy -->
 ## ❌ Eval gate: toy
-**Auto-accepted rows ≥95% right: lower bound 76.9% ❌**
+**Auto-accepted rows ≥95% right: 90.0% (95% CI 76.9%–96.0%) ❌**
 
 Blocked by G3 promise gate:
-- **promise**: auto-accepted rows ≥95.0% right: lower bound 76.9% (36/40 right)
+- **promise**: auto-accepted rows 90.0% right (36/40; 95% CI 76.9%–96.0%); must be ≥ 95.0% FAILED and not clearly below base's 100.0% FAILED
 - **confident-wrong**: auto-accepted but wrong: 0 → 4 (+4; allowance +0)
 
 What the other gates would say: G1 aggregate threshold ✅ · G2 aggregate paired delta ✅
@@ -127,7 +125,7 @@ What the other gates would say: G1 aggregate threshold ✅ · G2 aggregate paire
 
 | | base | head | limit | |
 |---|---:|---:|---|:-:|
-| Auto-accepted rows right (Wilson lower bound) | 98.1% | 76.9% | ≥ 95% | ❌ |
+| Auto-accepted rows right | 100.0% | 90.0% (CI 76.9%–96.0%) | ≥ 95%, and not clearly below base | ❌ |
 | Labels losing rows beyond noise | | none | per label, min 2 | ✅ |
 | Auto-accepted but wrong | 0 | 4 | +0 | ❌ |
 
@@ -138,7 +136,6 @@ What the other gates would say: G1 aggregate threshold ✅ · G2 aggregate paire
 | Auto-accepted | 98.0% | 20.0% |
 | Sent to a person | 2.0% | 80.0% |
 | Accuracy, all rows | 98.0% | 98.0% |
-| Auto-accepted rows right | 100.0% | 90.0% |
 | Cost per 1,000 rows (list price) | $1.00 | $1.00 |
 
 <details><summary><b>Rows to read (4)</b>: changed between base and head, the riskiest auto-accepted first</summary>

@@ -40,7 +40,8 @@ export function wilson(k: number, n: number, z = 1.959963984540054): Interval {
   const denom = 1 + z2 / n;
   const centre = (p + z2 / (2 * n)) / denom;
   const half = (z * Math.sqrt((p * (1 - p)) / n + z2 / (4 * n * n))) / denom;
-  return { point: p, lower: Math.max(0, centre - half), upper: Math.min(1, centre + half), k, n };
+  // Exact at the ends: with every row right the upper bound is 1, not 0.9999999…, so "head ≥ base" holds at 100%.
+  return { point: p, lower: k === 0 ? 0 : Math.max(0, centre - half), upper: k === n ? 1 : Math.min(1, centre + half), k, n };
 }
 
 /**

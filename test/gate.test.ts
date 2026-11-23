@@ -25,7 +25,8 @@ describe('stats', () => {
     expect(w.lower).toBeCloseTo(0.8883, 3);
     expect(w.upper).toBeCloseTo(0.9785, 3);
     expect(wilson(0, 0)).toMatchObject({ lower: 0, upper: 1 });
-    expect(wilson(10, 10).upper).toBeCloseTo(1, 12);
+    expect(wilson(10, 10).upper).toBe(1);
+    expect(wilson(0, 10).lower).toBe(0);
   });
   it('the paired bootstrap is deterministic for a seed', () => {
     const base = Array.from({ length: 200 }, (_, i) => (h(`b${i}`) < 0.8 ? 1 : 0));
@@ -124,6 +125,24 @@ describe('gates on fixtures', () => {
     expect(g.g3.pass).toBe(false);
     expect(g.g3.reasons.find((r) => r.check === 'promise')!.pass).toBe(false);
     expect(c.head.acceptedPrecision.point).toBeLessThan(0.95);
+  });
+
+  it('the promise at the target: main-like precision (95.3%, lower bound < 95%) passes; a clear drop below base fails even above the floor', () => {
+    // 1,500 accepted rows. Base and head 95.3% right: the Wilson lower bound (~94.2%) is below 95%, yet G3 passes.
+    const mk = (wrong: number, ref: string) => makeResult(grid(['alpha'], 1500).map((r, i) => (i < wrong ? { ...r, answer: 'zzz' } : r)), { ref });
+    const b = mk(70, 'base');
+    const same = runGates(compareResults(b, mk(70, 'head')), { g2Tolerance: 0.01 }).g3;
+    expect(compareResults(b, mk(70, 'head')).head.acceptedPrecision.lower).toBeLessThan(0.95);
+    expect(same.reasons.find((r) => r.check === 'promise')!.pass).toBe(true);
+    // Base at 99%, head at 96%: above the 95% floor, but its upper bound (~96.9%) is clearly below base's 99%.
+    const high = mk(15, 'base');
+    const drop = runGates(compareResults(high, mk(60, 'head')), { g2Tolerance: 0.01 }).g3.reasons.find((r) => r.check === 'promise')!;
+    expect(drop.pass).toBe(false);
+    expect(drop.detail).toMatch(/ok and not clearly below base's 99\.0% FAILED/);
+    // Below the floor.
+    const under = runGates(compareResults(b, mk(90, 'head')), { g2Tolerance: 0.01 }).g3.reasons.find((r) => r.check === 'promise')!;
+    expect(under.pass).toBe(false);
+    expect(under.detail).toMatch(/must be ≥ 95\.0% FAILED/);
   });
 
   it('noise allowances widen the limits', () => {
@@ -318,7 +337,7 @@ describe('comment', () => {
   it('red without a proposal', () => {
     const md = render(head);
     expect(md).toContain('## ❌ Eval gate: toy');
-    expect(md).toContain('lower bound');
+    expect(md).toContain('95% CI');
     expect(md).toMatchSnapshot();
   });
   it('red with a recalibration proposal and the trade-off in one line', () => {

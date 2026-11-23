@@ -122,7 +122,7 @@ describe('reusable mode, end to end (no network)', () => {
       calibrationPerLabel: 10,
       perLabel: 20,
       twopassVersion: '0.0.1',
-      // An 80-row slice can't certify 95%: a Wilson lower bound reaches 0.95 only with 73+ accepted rows, all right.
+      // 90% keeps the fake's 40 calibration rows able to reach the target with a margin.
       target: 0.9,
     });
     expect(init).toMatchObject({ sliceRows: 80, calibrationRows: 40, shortLabels: {} });
