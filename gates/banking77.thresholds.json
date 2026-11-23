@@ -1,14 +1,14 @@
 {
   "thresholds": {
-    "t0": 0.4913,
-    "t1": 0.7918,
-    "t2": 0.7981
+    "t0": 0.2349,
+    "t1": 0.755,
+    "t2": 0.7269
   },
-  "target": 0.95,
+  "target": 0.93,
   "checker": {
     "triage": "cloudflare/clef",
     "verify": "cloudflare/clef"
   },
   "source": "fitted on 1000 calibration rows of run 202611062131-banking77-0a3c-calib (writer anthropic/claude-haiku-5.5:batch)",
-  "fittedAt": "2026-11-23T20:16:34.609Z"
+  "fittedAt": "2026-11-23T21:34:20.376Z"
 }
