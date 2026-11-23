@@ -79,6 +79,9 @@ export async function gateRun(o: GateRunOptions): Promise<GateResult> {
   const { outcomes } = await execute(dir, {
     apiKey: o.env.openRouterKey,
     maxUsdOverride: maxUsd,
+    // Writer rows go in chunks of 50: the budget check estimates each chunk (worst case until it has seen 20 real answers),
+    // so a cap near the real cost does not refuse a whole round on a worst-case guess.
+    maxRowsPerBatch: 50,
     ...(o.env.anthropicKey ? { anthropicApiKey: o.env.anthropicKey } : {}),
     log,
   });
