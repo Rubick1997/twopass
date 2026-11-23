@@ -11,6 +11,9 @@ right ones to a person. An accuracy gate passes that change. This one doesn't.
 
 ## Quick start
 
+How much data: about 35+ labelled rows per label (15 for calibration, 20 for the CI slice) and at least ~200
+calibration rows in total for stable thresholds. With fewer, `init` notes the short labels and the thresholds overfit.
+
 You need a labelled CSV (one text column and one label column; an id column is optional), an
 [OpenRouter](https://openrouter.ai) key for the checker, and optionally an Anthropic key for Claude models.
 
