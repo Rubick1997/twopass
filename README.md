@@ -351,6 +351,49 @@ our scorer; the full pipeline's values 91.5% vs 92.9%. Ours is more lenient on t
 a label, written-out dates and letter case; the official one accepts a few date formats ours doesn't
 (`11.23.2010`). The ranking doesn't change.
 
+## Eval gate: keep the promise through every change
+
+Calibration makes TwoPass a promise: **auto-accepted rows are at least 95% right.** `twopass gate` checks that promise
+on every pull request that could move it, such as a prompt edit, a model or checker swap, or a threshold change. It runs
+the same labelled CI slice on the base and the head commit, blocks the PR when the promise breaks beyond the noise of
+unchanged code, proposes thresholds that restore it (with the automation it costs), and lists the rows a reviewer
+should read. It works on any labelled CSV: `twopass gate init` writes the config and a copyable GitHub workflow.
+Setup and reference: [docs/eval-gate.md](docs/eval-gate.md).
+
+**Why not an accuracy gate?** A change can raise accuracy and still break the promise. On Banking77 (CI slice:
+1,540 train rows, 20 per intent, none used in calibration; checked afterwards on all 3,080 test rows):
+
+| Change | Accuracy (test) | Auto-accepted rows right (test) | Accuracy gates (G1, G2) | Promise gate (G3) |
+|---|---|---|---|---|
+| Refit thresholds at 93% "to automate more" | 94.0% → 94.3% | 95.6% → **94.3%** | pass: wrong | **block: right** |
+| The same, with the gate's proposed recalibration applied | 94.0% → 93.9% | 95.6% → **96.0%** | pass: right | pass: right |
+| Checker version Jev 1.14 → 1.13, thresholds unchanged (CI slice) | 82.5% → 82.4% | 94.0% → 93.3% | pass | block |
+| Checker Clef → Jev, thresholds unchanged (CI slice) | 94.0% → 80.3% | 95.7% → 82.6% | block | block |
+| README edit, a no-op (CI slice) | 94.0% → 94.0% | 95.7% → 95.5% | pass | pass |
+
+On the first change, the PR comment proposed thresholds fitted on 800 calibration rows and checked on 200 held-out
+ones. Applied as-is, they restored the promise on the test split, at a cost of 0.7 points of auto-accept. Of the 10 rows
+the comment asked the reviewer to read, 4 were actually wrong. Eight runs of unchanged code moved precision by only 0.2
+points (95.59–95.79%), and none of the 56 pairs of those runs was blocked. A CI run costs about $0.67 per side at list
+price and takes about 90 seconds. Details: [`bench/gate/`](bench/gate/).
+
+The red comment from that change, as CI posted it on a demo pull request:
+
+![Eval gate comment: promise broken, G1 and G2 would pass](docs-public/eval-gate-red-verdict.jpg)
+![Eval gate comment: recalibration proposal with the auto-accept cost](docs-public/eval-gate-red-proposal.jpg)
+
+With the proposed thresholds committed (a second demo pull request), the same check goes green:
+
+![Eval gate comment: promise kept after recalibration](docs-public/eval-gate-green.jpg)
+
+TwoPass's own gate (`.github/workflows/eval-gate.yml`) runs **only when started by hand** from the Actions tab
+(≈ $1.40 a run). Readers' copies of the template run on pull requests unless they switch it the same way.
+
+**Routing.** `twopass gate` sends Claude models to Anthropic directly when `ANTHROPIC_API_KEY` is set and to OpenRouter
+otherwise (a task can force either), and reports every cost at list price from token usage. `twopass run` and
+`twopass bench` still route by the model ID as written, so the published part 1 numbers (Claude through OpenRouter)
+and part 2 numbers (Claude direct) reproduce as before.
+
 ## Cost
 
 Decision-model calls are cheap: about $0.07 (Jev), $0.10 (Luna) or $0.41 (Clef) per 1,000 rows for round 0. They

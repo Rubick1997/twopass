@@ -1,0 +1,24 @@
+# TwoPass's own eval gate. Same loader and the same `gate run` as a reader's config.
+# Prompts come from tasks/banking77.task.ts, so the part 1 calibration (Clef, 95% target) applies as published.
+# Data: Banking77 train (PolyAI, CC-BY-4.0), fetched with `pnpm fetch:banking77`. The test split is never read here.
+name: banking77
+type: classification
+data: data/banking77/train.csv
+columns: { id: id, text: text, label: label }
+labels: auto
+promise: { acceptedPrecision: 0.95 }
+slice:
+  file: bench/gate/ci-slice.json
+  perLabel: 20
+  seed: 42
+  exclude: [bench/gate/calibration-ids.json]
+calibration:
+  rows: bench/gate/calibration-ids.json
+  points: gates/banking77.calibration-points.json
+  checkShare: 0.2
+  seed: 7
+writer: { model: claude-haiku-5-5, escalation: claude-sonnet-5-5 }
+checker: { model: cloudflare/clef, thresholds: gates/banking77.thresholds.json }
+gate: { enforce: g3, maxUsd: 1.5, g2Tolerance: 0.01 }
+noise: gates/banking77.noise.json
+prompts: { from: tasks/banking77.task.ts }

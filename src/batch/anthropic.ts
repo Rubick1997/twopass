@@ -19,7 +19,9 @@ type Params = Anthropic.MessageCreateParamsNonStreaming;
 
 /**
  * Translates the pipeline's OpenRouter chat-completions body (see `writerBody`) into Messages API params.
- * Unknown keys throw instead of being dropped; `temperature`, `top_p`, `top_k` and `stream` are never sent.
+ * Unknown keys throw instead of being dropped; `temperature`, `top_p`, `top_k` and `stream` are never sent
+ * (Haiku 5.5 and Sonnet 5.5 reject non-default sampling values, Opus 5.5 the parameters themselves).
+ * A system text part marked `cache_control` keeps its marker (and TTL), so the label list is cached like on OpenRouter.
  */
 export function toMessagesParams(model: string, body: Record<string, unknown>): Params {
   for (const k of Object.keys(body)) {
@@ -28,16 +30,19 @@ export function toMessagesParams(model: string, body: Record<string, unknown>): 
   if (!Array.isArray(body.messages)) throw new Error('Anthropic direct: body.messages must be an array');
   if (typeof body.max_tokens !== 'number') throw new Error('Anthropic direct: body.max_tokens must be a number');
 
-  const system: string[] = [];
+  const system: Anthropic.TextBlockParam[] = [];
   const messages: Array<{ role: 'user' | 'assistant'; content: Anthropic.MessageParam['content'] }> = [];
   for (const m of body.messages as Array<{ role?: unknown; content?: unknown }>) {
-    if (m.role === 'system') system.push(systemText(m.content));
+    if (m.role === 'system') system.push(...systemBlocks(m.content));
     else if (m.role === 'user' || m.role === 'assistant') messages.push({ role: m.role, content: m.content as Anthropic.MessageParam['content'] });
     else throw new Error(`Anthropic direct: unsupported message role ${JSON.stringify(m.role)}`);
   }
 
   const params: Params = { model, max_tokens: body.max_tokens, messages };
-  if (system.length) params.system = system.join('\n\n');
+  if (system.length) {
+    // Plain text stays a plain string (the request is byte-identical to before caching was supported).
+    params.system = system.some((b) => b.cache_control) ? system : system.map((b) => b.text).join('\n\n');
+  }
 
   const outputConfig: Anthropic.OutputConfig = {};
   const reasoning = body.reasoning;
@@ -70,17 +75,28 @@ export function toMessagesParams(model: string, body: Record<string, unknown>): 
   return params;
 }
 
-function systemText(content: unknown): string {
-  if (typeof content === 'string') return content;
+function systemBlocks(content: unknown): Anthropic.TextBlockParam[] {
+  if (typeof content === 'string') return [{ type: 'text', text: content }];
   if (Array.isArray(content)) {
-    return content
-      .map((p: { type?: unknown; text?: unknown }) => {
-        if (p?.type !== 'text' || typeof p.text !== 'string') throw new Error('Anthropic direct: system content parts must be text');
-        return p.text;
-      })
-      .join('');
+    const parts = content.map((p: { type?: unknown; text?: unknown; cache_control?: unknown }) => {
+      if (p?.type !== 'text' || typeof p.text !== 'string') throw new Error('Anthropic direct: system content parts must be text');
+      const block: Anthropic.TextBlockParam = { type: 'text', text: p.text };
+      if (p.cache_control !== undefined) block.cache_control = cacheControl(p.cache_control);
+      return block;
+    });
+    // Parts without markers are joined, as before; a marker applies to everything up to and including its part.
+    if (!parts.some((b) => b.cache_control)) return [{ type: 'text', text: parts.map((b) => b.text).join('') }];
+    return parts;
   }
   throw new Error('Anthropic direct: system message content must be a string or text parts');
+}
+
+function cacheControl(raw: unknown): Anthropic.CacheControlEphemeral {
+  const c = raw as { type?: unknown; ttl?: unknown };
+  if (!c || c.type !== 'ephemeral') throw new Error(`Anthropic direct: unsupported cache_control ${JSON.stringify(raw)}`);
+  if (c.ttl === undefined) return { type: 'ephemeral' };
+  if (c.ttl !== '5m' && c.ttl !== '1h') throw new Error(`Anthropic direct: unsupported cache ttl ${JSON.stringify(c.ttl)}`);
+  return { type: 'ephemeral', ttl: c.ttl };
 }
 
 /** Decodes one batch result line. Always fills tokens, usage and buckets when a message exists. */
@@ -118,6 +134,37 @@ export function decodeAnthropicResult(line: Anthropic.Messages.MessageBatchIndiv
   const text = msg.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('');
   if (text.trim() === '') return fail('empty content', usage);
   return { custom_id, ok: true, text, ...usage };
+}
+
+/** Decodes a synchronous Messages response the same way as a batch line, plus the model that served it. */
+export function decodeAnthropicMessage(custom_id: string, msg: Anthropic.Message): BatchResultLine {
+  const line = decodeAnthropicResult({ custom_id, result: { type: 'succeeded', message: msg } } as Anthropic.Messages.MessageBatchIndividualResponse);
+  return { ...line, provider: 'anthropic', servedModel: msg.model };
+}
+
+export interface AnthropicSyncOptions {
+  apiKey: string;
+  fetch?: FetchFn;
+  /** The SDK's own retries (network errors, 408, 409, 429, 5xx). Default 4. */
+  maxRetries?: number;
+}
+
+/** One Messages API call per request (sync path, used by `SyncBatchProvider`). Prompt caching as in the batch path. */
+export function anthropicSyncCaller(opts: AnthropicSyncOptions): (model: string, req: BatchRequest) => Promise<BatchResultLine> {
+  const client = new Anthropic({
+    apiKey: opts.apiKey,
+    maxRetries: opts.maxRetries ?? 4,
+    ...(opts.fetch ? { fetch: opts.fetch } : {}),
+  });
+  return async (model, req) => {
+    try {
+      return decodeAnthropicMessage(req.custom_id, await client.messages.create(toMessagesParams(model, req.body)));
+    } catch (err) {
+      // A 400 means the request itself is wrong (a setting the model refuses): every row would fail the same way.
+      if (err instanceof Anthropic.BadRequestError) throw err;
+      return { custom_id: req.custom_id, ok: false, error: String(err).slice(0, 300), inputTokens: 0, outputTokens: 0, provider: 'anthropic' };
+    }
+  };
 }
 
 export interface AnthropicBatchOptions {

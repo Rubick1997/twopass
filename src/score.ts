@@ -77,6 +77,8 @@ export interface FieldSlotAnswers {
 export interface ModelPoints {
   model: string;
   points: Record<Stage, Point[]>;
+  /** Classification tasks: the row ID of each point, in the same order as `points` (rows without an answer have no point). */
+  ids?: Record<Stage, string[]>;
   /** Extraction tasks only: every field slot of every row, with this model's round-1 and round-2 answers. */
   fieldSlots?: FieldSlotAnswers[];
   /** Extraction tasks only: the verify2 points, each with this model's own verify1 answer for the slot. */
@@ -259,6 +261,7 @@ export async function scoreRun(opts: ScoreOptions): Promise<ModelPoints[]> {
     }
 
     const points: Record<Stage, Point[]> = { triage: [], verify1: [], verify2: [] };
+    const ids: Record<Stage, string[]> = { triage: [], verify1: [], verify2: [] };
     const verify2Slots: Verify2Slot[] = [];
     const fieldSlots: FieldSlotAnswers[] = [];
     for (const row of records) {
@@ -290,13 +293,17 @@ export async function scoreRun(opts: ScoreOptions): Promise<ModelPoints[]> {
         }
         continue;
       }
-      if (verdicts.triage.has(row.id)) points.triage.push(triagePoint(verdicts.triage.get(row.id), label));
+      if (verdicts.triage.has(row.id)) {
+        points.triage.push(triagePoint(verdicts.triage.get(row.id), label));
+        ids.triage.push(row.id);
+      }
       for (const stage of ['verify1', 'verify2'] as const) {
         if (!verdicts[stage].has(row.id)) continue;
         points[stage].push(verifyPoint(verdicts[stage].get(row.id), writerAnswers[stage].get(row.id) === label));
+        ids[stage].push(row.id);
       }
     }
-    out.push({ model, points, ...(task.extract ? { verify2Slots, fieldSlots } : {}), spentUsd });
+    out.push({ model, points, ...(task.extract ? { verify2Slots, fieldSlots } : { ids }), spentUsd });
   }
   return out;
 }

@@ -31,13 +31,21 @@ describe('isAnthropicDirect', () => {
 
 describe('toMessagesParams', () => {
   const user = { role: 'user', content: 'Q' };
-  it('moves system messages to the top-level system string and drops cache_control', () => {
+  it('moves system messages to the top-level system, keeping a cache_control marker and its TTL', () => {
     const p = toMessagesParams('claude-haiku-5-5', {
       messages: [{ role: 'system', content: [{ type: 'text', text: 'be brief', cache_control: { type: 'ephemeral', ttl: '1h' } }] }, user],
       max_tokens: 20,
     });
-    expect(p).toEqual({ model: 'claude-haiku-5-5', max_tokens: 20, system: 'be brief', messages: [user] });
-    expect(JSON.stringify(p)).not.toContain('cache_control');
+    expect(p).toEqual({
+      model: 'claude-haiku-5-5',
+      max_tokens: 20,
+      system: [{ type: 'text', text: 'be brief', cache_control: { type: 'ephemeral', ttl: '1h' } }],
+      messages: [user],
+    });
+    expect(toMessagesParams('m', { messages: [{ role: 'system', content: [{ type: 'text', text: 'a' }, { type: 'text', text: 'b' }] }, user], max_tokens: 1 }).system).toBe('ab');
+    expect(() =>
+      toMessagesParams('m', { messages: [{ role: 'system', content: [{ type: 'text', text: 'a', cache_control: { type: 'ephemeral', ttl: '2h' } }] }, user], max_tokens: 1 }),
+    ).toThrow(/ttl/);
     expect(toMessagesParams('m', { messages: [{ role: 'system', content: 'plain' }, user], max_tokens: 1 }).system).toBe('plain');
     expect(toMessagesParams('m', { messages: [user], max_tokens: 1 })).not.toHaveProperty('system');
   });
@@ -84,8 +92,12 @@ describe('toMessagesParams', () => {
     const task = defineTask({ ...toyTask(), writer: { ...toyTask().writer, system: 'SYS', cacheSystem: '1h' } });
     const body = writerBody(task, { text: 'hello' }, 1, replay([]), 'r1', 'normal');
     const p = toMessagesParams('claude-haiku-5-5', body);
-    expect(p).toMatchObject({ system: 'SYS', messages: [{ role: 'user', content: 'hello' }], max_tokens: 5, thinking: { type: 'disabled' } });
-    expect(JSON.stringify(p)).not.toContain('cache_control');
+    expect(p).toMatchObject({
+      system: [{ type: 'text', text: 'SYS', cache_control: { type: 'ephemeral', ttl: '1h' } }],
+      messages: [{ role: 'user', content: 'hello' }],
+      max_tokens: 5,
+      thinking: { type: 'disabled' },
+    });
   });
 });
 
@@ -312,9 +324,9 @@ describe('prices, task validation and the context check', () => {
   it('prices Anthropic-direct IDs from the pinned batch table and others from OpenRouter', () => {
     const models = [{ id: 'a/b:batch', pricing: { prompt: '0.000001', completion: '0.000005' } }] as never;
     const p = pricesFrom(models, ['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5', 'a/b:batch']);
-    expect(p['claude-haiku-5-5']).toEqual({ inputPerToken: 5e-8, outputPerToken: 2.5e-7 });
-    expect(p['claude-sonnet-5-5']).toEqual({ inputPerToken: 1e-6, outputPerToken: 5e-6 });
-    expect(p['claude-opus-5-5']).toEqual({ inputPerToken: 2e-6, outputPerToken: 10e-6 });
+    expect(p['claude-haiku-5-5']).toMatchObject({ inputPerToken: 5e-8, outputPerToken: 2.5e-7, cacheReadPerToken: 5e-9 });
+    expect(p['claude-sonnet-5-5']).toMatchObject({ inputPerToken: 1e-6, outputPerToken: 5e-6, cacheReadPerToken: 5e-8 });
+    expect(p['claude-opus-5-5']).toMatchObject({ inputPerToken: 2e-6, outputPerToken: 10e-6, cacheWrite1hPerToken: 4e-6 });
     expect(p['a/b:batch']).toEqual({ inputPerToken: 0.000001, outputPerToken: 0.000005 });
     expect(Object.keys(ANTHROPIC_BATCH_PRICES)).toHaveLength(3);
   });

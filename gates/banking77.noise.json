@@ -1,0 +1,423 @@
+{
+  "kind": "twopass-gate-noise",
+  "version": 1,
+  "task": "banking77",
+  "runs": 8,
+  "routingKey": "claude-haiku-5-5→anthropic:claude-haiku-5-5/sync, claude-sonnet-5-5→anthropic:claude-sonnet-5-5/sync",
+  "createdAt": "2026-11-23T21:27:55.405Z",
+  "refs": [
+    "main-noise-1@cfeddfe",
+    "main-noise-2@a1e8a77",
+    "main-noise-3@a1e8a77",
+    "main-noise-4@a1e8a77",
+    "main-noise-5@a1e8a77",
+    "main-noise-6@a1e8a77",
+    "main-noise-7@a1e8a77",
+    "main-noise-8@a1e8a77"
+  ],
+  "metrics": {
+    "accuracy": {
+      "values": [
+        0.9383116883116883,
+        0.9383116883116883,
+        0.9383116883116883,
+        0.9383116883116883,
+        0.9409090909090909,
+        0.9396103896103896,
+        0.938961038961039,
+        0.9396103896103896
+      ],
+      "min": 0.9383116883116883,
+      "max": 0.9409090909090909,
+      "spread": 0.0025974025974025983
+    },
+    "acceptedPrecision": {
+      "values": [
+        0.9572763684913218,
+        0.9578877005347594,
+        0.9558823529411765,
+        0.9566088117489987,
+        0.9573617588274483,
+        0.9572763684913218,
+        0.9566088117489987,
+        0.9579158316633266
+      ],
+      "min": 0.9558823529411765,
+      "max": 0.9579158316633266,
+      "spread": 0.002033478722150095
+    },
+    "acceptedLower": {
+      "values": [
+        0.9458121167444762,
+        0.946482979642664,
+        0.9442565125429075,
+        0.9450709469202174,
+        0.9459196926891016,
+        0.9458121167444762,
+        0.9450709469202174,
+        0.9465184898607785
+      ],
+      "min": 0.9442565125429075,
+      "max": 0.9465184898607785,
+      "spread": 0.0022619773178709224
+    },
+    "acceptShare": {
+      "values": [
+        0.9727272727272728,
+        0.9714285714285714,
+        0.9714285714285714,
+        0.9727272727272728,
+        0.9746753246753247,
+        0.9727272727272728,
+        0.9727272727272728,
+        0.9720779220779221
+      ],
+      "min": 0.9714285714285714,
+      "max": 0.9746753246753247,
+      "spread": 0.0032467532467532756
+    },
+    "confidentWrong": {
+      "values": [
+        64,
+        63,
+        66,
+        65,
+        64,
+        64,
+        65,
+        63
+      ],
+      "min": 63,
+      "max": 66,
+      "spread": 3
+    },
+    "costPer1k": {
+      "values": [
+        0.43696457922077997,
+        0.43778875844155934,
+        0.4393652779220782,
+        0.4340921506493512,
+        0.43174879090909146,
+        0.4315190181818186,
+        0.4383108000000007,
+        0.4393383883116888
+      ],
+      "min": 0.4315190181818186,
+      "max": 0.4393652779220782,
+      "spread": 0.007846259740259598
+    }
+  },
+  "perLabel": {
+    "activate_my_card": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "age_limit": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "apple_pay_or_google_pay": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "atm_support": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "automatic_top_up": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "balance_not_updated_after_bank_transfer": {
+      "n": 20,
+      "maxNetLoss": 1
+    },
+    "balance_not_updated_after_cheque_or_cash_deposit": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "beneficiary_not_allowed": {
+      "n": 20,
+      "maxNetLoss": 1
+    },
+    "cancel_transfer": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "card_about_to_expire": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "card_acceptance": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "card_arrival": {
+      "n": 20,
+      "maxNetLoss": 1
+    },
+    "card_delivery_estimate": {
+      "n": 20,
+      "maxNetLoss": 1
+    },
+    "card_linking": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "card_not_working": {
+      "n": 20,
+      "maxNetLoss": 1
+    },
+    "card_payment_fee_charged": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "card_payment_not_recognised": {
+      "n": 20,
+      "maxNetLoss": 1
+    },
+    "card_payment_wrong_exchange_rate": {
+      "n": 20,
+      "maxNetLoss": 2
+    },
+    "card_swallowed": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "cash_withdrawal_charge": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "cash_withdrawal_not_recognised": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "change_pin": {
+      "n": 20,
+      "maxNetLoss": 1
+    },
+    "compromised_card": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "contactless_not_working": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "country_support": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "declined_card_payment": {
+      "n": 20,
+      "maxNetLoss": 1
+    },
+    "declined_cash_withdrawal": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "declined_transfer": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "direct_debit_payment_not_recognised": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "disposable_card_limits": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "edit_personal_details": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "exchange_charge": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "exchange_rate": {
+      "n": 20,
+      "maxNetLoss": 1
+    },
+    "exchange_via_app": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "extra_charge_on_statement": {
+      "n": 20,
+      "maxNetLoss": 1
+    },
+    "failed_transfer": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "fiat_currency_support": {
+      "n": 20,
+      "maxNetLoss": 1
+    },
+    "get_disposable_virtual_card": {
+      "n": 20,
+      "maxNetLoss": 1
+    },
+    "get_physical_card": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "getting_spare_card": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "getting_virtual_card": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "lost_or_stolen_card": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "lost_or_stolen_phone": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "order_physical_card": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "passcode_forgotten": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "pending_card_payment": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "pending_cash_withdrawal": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "pending_top_up": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "pending_transfer": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "pin_blocked": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "receiving_money": {
+      "n": 20,
+      "maxNetLoss": 1
+    },
+    "Refund_not_showing_up": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "request_refund": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "reverted_card_payment?": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "supported_cards_and_currencies": {
+      "n": 20,
+      "maxNetLoss": 1
+    },
+    "terminate_account": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "top_up_by_bank_transfer_charge": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "top_up_by_card_charge": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "top_up_by_cash_or_cheque": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "top_up_failed": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "top_up_limits": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "top_up_reverted": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "topping_up_by_card": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "transaction_charged_twice": {
+      "n": 20,
+      "maxNetLoss": 1
+    },
+    "transfer_fee_charged": {
+      "n": 20,
+      "maxNetLoss": 3
+    },
+    "transfer_into_account": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "transfer_not_received_by_recipient": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "transfer_timing": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "unable_to_verify_identity": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "verify_my_identity": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "verify_source_of_funds": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "verify_top_up": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "virtual_card_not_working": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "visa_or_mastercard": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "why_verify_identity": {
+      "n": 20,
+      "maxNetLoss": 0
+    },
+    "wrong_amount_of_cash_received": {
+      "n": 20,
+      "maxNetLoss": 1
+    },
+    "wrong_exchange_rate_for_cash_withdrawal": {
+      "n": 20,
+      "maxNetLoss": 0
+    }
+  },
+  "maxAnswerFlips": 17,
+  "maxAcceptFlips": 14,
+  "identicalShare": 0.9720779220779221
+}

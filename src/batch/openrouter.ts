@@ -26,6 +26,8 @@ const lineSchema = z.looseObject({
 });
 
 const chatBodySchema = z.looseObject({
+  model: z.string().optional(),
+  provider: z.string().optional(),
   choices: z.array(
     z.looseObject({
       finish_reason: z.string().nullable().optional(),
@@ -150,8 +152,14 @@ export function decodeResultLine(raw: unknown): BatchResultLine | null {
   if (response.status_code !== 200) {
     return fail(`status ${response.status_code}: ${JSON.stringify(response.body).slice(0, 200)}`);
   }
-  const body = chatBodySchema.safeParse(response.body);
-  if (!body.success) return fail(`unexpected body: ${JSON.stringify(response.body).slice(0, 200)}`);
+  return decodeChatBody(custom_id, response.body);
+}
+
+/** Decodes a chat-completions body (a batch line's `response.body`, or a sync response). */
+export function decodeChatBody(custom_id: string, raw: unknown): BatchResultLine {
+  const fail = (message: string): BatchResultLine => ({ custom_id, ok: false, error: message, inputTokens: 0, outputTokens: 0 });
+  const body = chatBodySchema.safeParse(raw);
+  if (!body.success) return fail(`unexpected body: ${JSON.stringify(raw).slice(0, 200)}`);
   const usage = {
     inputTokens: body.data.usage?.prompt_tokens ?? 0,
     outputTokens: body.data.usage?.completion_tokens ?? 0,
@@ -165,6 +173,43 @@ export function decodeResultLine(raw: unknown): BatchResultLine | null {
   const content = choice?.message.content;
   if (typeof content !== 'string' || content.trim() === '') return { ...fail('empty content'), ...usage };
   return { custom_id, ok: true, text: content, ...usage };
+}
+
+export const CHAT_URL = 'https://openrouter.ai/api/v1/chat/completions';
+
+export interface OpenRouterSyncOptions extends RetryOptions {
+  apiKey: string;
+  url?: string;
+  fetch?: FetchFn;
+}
+
+/**
+ * One chat-completions call per request (sync path, used by `SyncBatchProvider`). `model` must be a non-batch ID
+ * (`anthropic/claude-haiku-5.5`, not `…:batch`). Retries 429/5xx; a 400 throws (every row would fail the same way).
+ */
+export function openRouterSyncCaller(opts: OpenRouterSyncOptions): (model: string, req: BatchRequest) => Promise<BatchResultLine> {
+  return async (model, req) => {
+    if (model.endsWith(':batch')) throw new Error(`Sync calls need a non-batch model ID, got ${model}`);
+    try {
+      const raw = await requestJson<unknown>(
+        opts.fetch ?? fetch,
+        opts.url ?? CHAT_URL,
+        { method: 'POST', headers: authHeaders(opts.apiKey), body: JSON.stringify({ ...req.body, model }) },
+        opts,
+      );
+      const line = decodeChatBody(req.custom_id, raw);
+      const meta = chatBodySchema.safeParse(raw);
+      return {
+        ...line,
+        provider: 'openrouter',
+        ...(meta.success && meta.data.model ? { servedModel: meta.data.model } : {}),
+        ...(meta.success && meta.data.provider ? { upstream: meta.data.provider } : {}),
+      };
+    } catch (err) {
+      if (err instanceof HttpError && err.status >= 400 && err.status < 500 && err.status !== 429) throw err;
+      return { custom_id: req.custom_id, ok: false, error: String(err).slice(0, 300), inputTokens: 0, outputTokens: 0, provider: 'openrouter' };
+    }
+  };
 }
 
 function stringifyError(error: unknown): string {

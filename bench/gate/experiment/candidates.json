@@ -1,0 +1,49 @@
+{
+  "note": "Candidate changes for the eval-gate experiment. Each head is a branch; base is the commit the branch was made from (git merge-base with ci-eval-gate). Run with: node bench/gate/experiment/run-candidate.ts <id> --max-usd <cap per side> reuseBase: the base run of another candidate with the same base config is reused instead of paid again (budget).",
+  "candidates": [
+    {
+      "id": "6",
+      "group": "threshold",
+      "change": "Refit the thresholds at a 93% target instead of 95% (\"let's automate more\"); the promise stays 95%",
+      "branch": "exp/6-refit-93",
+      "task": "gates/banking77.task.yaml"
+    },
+    {
+      "id": "1",
+      "group": "same accuracy, promise at risk",
+      "change": "Checker version change Jev 1.14 -> Jev 1.13 with thresholds unchanged (fitted on 1.14)",
+      "branch": "exp/1-jev-1.13",
+      "task": "bench/gate/experiment/banking77-jev.task.yaml",
+      "headFlags": [
+        "--allow-threshold-mismatch"
+      ]
+    },
+    {
+      "id": "3",
+      "group": "same accuracy, promise at risk",
+      "change": "Checker Clef -> Jev 1.14 with Clef's thresholds unchanged",
+      "branch": "exp/3-clef-to-jev",
+      "task": "gates/banking77.task.yaml",
+      "headFlags": [
+        "--allow-threshold-mismatch"
+      ],
+      "reuseBase": "6"
+    },
+    {
+      "id": "6r",
+      "group": "recovery",
+      "change": "Change 6 with the gate's proposed recalibration applied (gate recalibrate --write)",
+      "branch": "exp/6r-recalibrated",
+      "task": "gates/banking77.task.yaml",
+      "reuseBase": "6"
+    },
+    {
+      "id": "0a",
+      "group": "control",
+      "change": "README edit (no-op)",
+      "branch": "exp/0a-readme",
+      "task": "gates/banking77.task.yaml",
+      "reuseBase": "6"
+    }
+  ]
+}

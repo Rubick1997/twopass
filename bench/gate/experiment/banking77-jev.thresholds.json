@@ -1,0 +1,14 @@
+{
+  "thresholds": {
+    "t0": 0.97,
+    "t1": 0.96,
+    "t2": 0.95
+  },
+  "target": 0.95,
+  "checker": {
+    "triage": "typesafe/jev-1.14",
+    "verify": "typesafe/jev-1.14"
+  },
+  "source": "fitted on 1000 calibration rows of run 202611062131-banking77-0a3c-calib (writer anthropic/claude-haiku-5.5:batch)",
+  "fittedAt": "2026-11-23T21:33:36.912Z"
+}

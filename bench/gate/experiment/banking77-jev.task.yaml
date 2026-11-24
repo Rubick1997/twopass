@@ -1,0 +1,24 @@
+# Experiment base for changes that need Jev (change 1: Jev 1.14 -> 1.13; change 2 on Jev). Not a CI config.
+# Prompts come from tasks/banking77.task.ts, so the part 1 Jev 1.14 calibration (95% target) applies: t0 0.97, t1 0.96, t2 0.95.
+# Data: Banking77 train (PolyAI, CC-BY-4.0), fetched with `pnpm fetch:banking77`. The test split is never read here.
+name: banking77-jev
+type: classification
+data: data/banking77/train.csv
+columns: { id: id, text: text, label: label }
+labels: auto
+promise: { acceptedPrecision: 0.95 }
+slice:
+  file: bench/gate/ci-slice.json
+  perLabel: 20
+  seed: 42
+  exclude: [bench/gate/calibration-ids.json]
+calibration:
+  rows: bench/gate/calibration-ids.json
+  points: gates/banking77.calibration-points.json
+  checkShare: 0.2
+  seed: 7
+writer: { model: claude-haiku-5-5, escalation: claude-sonnet-5-5 }
+checker: { model: typesafe/jev-1.14, thresholds: bench/gate/experiment/banking77-jev.thresholds.json }
+gate: { enforce: g3, maxUsd: 1.5, g2Tolerance: 0.01 }
+noise: bench/gate/experiment/banking77-jev.noise.json
+prompts: { from: tasks/banking77.task.ts }

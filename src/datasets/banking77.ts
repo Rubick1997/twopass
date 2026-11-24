@@ -20,10 +20,10 @@ export function banking77Path(dataDir: string, split: Split): string {
   return join(dataDir, 'banking77', `${split}.csv`);
 }
 
-/** Downloads any split that is missing. Returns the CSV paths. */
-export async function ensureBanking77(dataDir: string, log: (m: string) => void = () => {}): Promise<Record<Split, string>> {
+/** Downloads any split that is missing (both by default; the eval gate's CI fetches `train` only). Returns the CSV paths. */
+export async function ensureBanking77(dataDir: string, log: (m: string) => void = () => {}, splits: readonly Split[] = ['test', 'train']): Promise<Record<Split, string>> {
   mkdirSync(join(dataDir, 'banking77'), { recursive: true });
-  for (const split of ['test', 'train'] as const) {
+  for (const split of splits) {
     const path = banking77Path(dataDir, split);
     if (existsSync(path)) continue;
     log(`downloading Banking77 ${split} split (${EXPECTED[split]} rows)…`);

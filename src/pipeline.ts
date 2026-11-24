@@ -367,6 +367,9 @@ async function collectBatch(ctx: PipelineContext, batch: BatchInfo): Promise<voi
       outputTokens: line.outputTokens,
       ...(line.usage !== undefined ? { usage: line.usage } : {}),
       costUsd,
+      ...(line.provider ? { provider: line.provider } : {}),
+      ...(line.servedModel ? { servedModel: line.servedModel } : {}),
+      ...(line.upstream ? { upstream: line.upstream } : {}),
     });
   }
   for (const cid of expected) {

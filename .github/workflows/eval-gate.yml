@@ -1,0 +1,129 @@
+# TwoPass's own eval gate. Generated from templates/github/eval-gate.yml, with two differences: it builds TwoPass from
+# each commit's source (base runs base's code, head runs head's), and it fetches Banking77's train split.
+# The task goes through gates/banking77.task.yaml, the same path a reader's config takes.
+#
+# MANUAL ONLY (≈ $1.40 per run): nothing runs on pull requests or merges. Start it from the Actions tab, "Run workflow":
+#   "Use workflow from" = the branch to test (head); base = what to compare against (default main);
+#   pr = the PR to comment on (blank: the open PR whose head is that branch, if any; otherwise the job summary only).
+# Only people with write access can start it, so fork PRs never get the secrets. Never pull_request_target.
+#
+# Secrets: OPENROUTER_API_KEY (checker), ANTHROPIC_API_KEY (Claude models direct; without it, OpenRouter).
+
+name: eval-gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      base:
+        description: 'Compare against (branch, tag or commit)'
+        required: true
+        default: main
+      pr:
+        description: 'PR number to comment on (blank: the open PR for this branch)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: eval-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TASK: gates/banking77.task.yaml
+  # Cap per side, list price. Projected ≈ $0.70 per side on 1,540 rows with Clef (measured 2026-11-23).
+  MAX_USD: '1.00'
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      BASE_REF: ${{ inputs.base }}
+      HEAD_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.18'
+      # Restore and save separately: actions/cache only saves after a successful job, and a red gate is a failed job.
+      - id: data-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: data/banking77/train.csv
+          key: banking77-train-v1
+
+      - name: Fetch Banking77 (train split only)
+        run: |
+          pnpm install --frozen-lockfile
+          node scripts/fetch-banking77.ts --train-only
+
+      - if: steps.data-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: data/banking77/train.csv
+          key: banking77-train-v1
+
+      - name: Run base
+        id: base
+        run: |
+          mkdir -p "$RUNNER_TEMP/gate"
+          BASE_SHA="$(git rev-parse --verify --quiet "origin/$BASE_REF" || git rev-parse --verify "$BASE_REF")"
+          echo "Comparing $GITHUB_REF_NAME ($HEAD_SHA) against $BASE_REF ($BASE_SHA)" >> "$GITHUB_STEP_SUMMARY"
+          git checkout --quiet "$BASE_SHA"
+          if [ ! -f "$TASK" ]; then echo "skip=1" >> "$GITHUB_OUTPUT"; echo "Base has no $TASK yet: nothing to compare." >> "$GITHUB_STEP_SUMMARY"; exit 0; fi
+          pnpm install --frozen-lockfile
+          node src/cli.ts gate run --task "$TASK" --ref base --out "$RUNNER_TEMP/gate/base.json" --max-usd "$MAX_USD"
+
+      - name: Run head
+        if: steps.base.outputs.skip != '1'
+        run: |
+          git checkout --quiet "$HEAD_SHA"
+          pnpm install --frozen-lockfile
+          node src/cli.ts gate run --task "$TASK" --ref head --out "$RUNNER_TEMP/gate/head.json" --max-usd "$MAX_USD"
+
+      - name: Compare
+        id: compare
+        if: steps.base.outputs.skip != '1'
+        run: |
+          set +e
+          node src/cli.ts gate compare "$RUNNER_TEMP/gate/base.json" "$RUNNER_TEMP/gate/head.json" --task "$TASK" --comment "$RUNNER_TEMP/gate/comment.md" --artifact eval-gate-results
+          echo "status=$?" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/gate/comment.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post or update the PR comment
+        if: steps.base.outputs.skip != '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_INPUT: ${{ inputs.pr }}
+        run: |
+          PR="$PR_INPUT"
+          if [ -z "$PR" ]; then PR="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$GITHUB_REF_NAME" --state open --json number --jq '.[0].number // empty')"; fi
+          if [ -z "$PR" ]; then echo "No open PR for $GITHUB_REF_NAME: the comment is in this job's summary only." >> "$GITHUB_STEP_SUMMARY"; exit 0; fi
+          marker="$(head -n 1 "$RUNNER_TEMP/gate/comment.md")"
+          id="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -n 1)"
+          if [ -n "$id" ]; then
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F "body=@$RUNNER_TEMP/gate/comment.md" > /dev/null
+          else
+            gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/gate/comment.md"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.base.outputs.skip != '1'
+        with:
+          name: eval-gate-results
+          path: ${{ runner.temp }}/gate/
+          if-no-files-found: ignore
+
+      - name: Fail if the enforced gate failed
+        if: steps.base.outputs.skip != '1' && steps.compare.outputs.status != '0'
+        run: exit 1
