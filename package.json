@@ -1,6 +1,6 @@
 {
   "name": "twopass",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Batch LLM work with a decision model checking every row: accept, re-run, or hand to a human.",
   "type": "module",
   "license": "MIT",
@@ -32,6 +32,7 @@
   },
   "scripts": {
     "twopass": "node src/cli.ts",
+    "prepublishOnly": "pnpm build",
     "build": "tsc -p tsconfig.build.json && vite build --config ui/vite.config.ts",
     "build:ui": "vite build --config ui/vite.config.ts",
     "dev:ui": "vite --config ui/vite.config.ts",

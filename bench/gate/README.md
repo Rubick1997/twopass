@@ -50,8 +50,8 @@ gitignored, so the IDs need to be committed for the slice exclusion (to be added
 
 ## 5. Packaging
 
-`twopass` is **not on npm**. The name is free (404), and `package.json` has version 0.0.1 with the bin at
-`dist/src/cli.js`. A git install (`github:Rubick1997/twopass#<tag>`) wouldn't work as-is because `dist/` isn't
+`twopass` was **not on npm** at the time (published as 0.1.0 on 24 Nov 2026). The name was free (404), and
+`package.json` had version 0.0.1 with the bin at `dist/src/cli.js`. A git install (`github:Rubick1997/twopass#<tag>`) wouldn't work as-is because `dist/` isn't
 committed; it would need a `prepare` build. Publishing is Rustam's call.
 
 ## 6. How the classification task is defined
@@ -181,7 +181,7 @@ in about a second, no id column needed. Awkward:
 1. Errors printed a stack trace; fixed (one message plus the fixing command).
 2. A 30-rows-per-label CSV splits 15/15 between calibration and slice: `init` notes the short labels, but 60
    calibration rows are too few for stable thresholds. The docs should say how many labelled rows to start with.
-3. The template's `npm install --global twopass@0.0.1` fails until TwoPass is on npm.
+3. The template's `npm install --global twopass@0.0.1` failed until TwoPass was on npm (fixed: 0.1.0 is published).
 Not followed: `calibrate --collect` and the noise runs (paid), and the GitHub side (push, secrets, PR) needs approval.
 
 ## First CI run (draft PR #11: change 6 into ci-eval-gate, 24 Nov 2026)
