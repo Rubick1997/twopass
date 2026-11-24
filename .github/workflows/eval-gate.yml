@@ -2,22 +2,33 @@
 # each commit's source (base runs base's code, head runs head's), and it fetches Banking77's train split.
 # The task goes through gates/banking77.task.yaml, the same path a reader's config takes.
 #
+# MANUAL ONLY (≈ $1.40 per run): nothing runs on pull requests or merges. Start it from the Actions tab, "Run workflow":
+#   "Use workflow from" = the branch to test (head); base = what to compare against (default main);
+#   pr = the PR to comment on (blank: the open PR whose head is that branch, if any; otherwise the job summary only).
+# Only people with write access can start it, so fork PRs never get the secrets. Never pull_request_target.
+#
 # Secrets: OPENROUTER_API_KEY (checker), ANTHROPIC_API_KEY (Claude models direct; without it, OpenRouter).
-# Fork PRs get no secrets and are skipped. Never pull_request_target.
 
 name: eval-gate
 
 on:
-  pull_request:
-    paths: ['src/**', 'tasks/**', 'gates/**', 'bench/gate/**', 'package.json', 'pnpm-lock.yaml']
   workflow_dispatch:
+    inputs:
+      base:
+        description: 'Compare against (branch, tag or commit)'
+        required: true
+        default: main
+      pr:
+        description: 'PR number to comment on (blank: the open PR for this branch)'
+        required: false
+        default: ''
 
 permissions:
   contents: read
   pull-requests: write
 
 concurrency:
-  group: eval-gate-${{ github.event.pull_request.number || github.ref }}
+  group: eval-gate-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -26,22 +37,14 @@ env:
   MAX_USD: '1.00'
 
 jobs:
-  fork-note:
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
-    runs-on: ubuntu-latest
-    steps:
-      - run: |
-          echo "Eval gate skipped: pull requests from forks get no API keys. A maintainer can run it with workflow_dispatch." >> "$GITHUB_STEP_SUMMARY"
-
   gate:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      BASE_SHA: ${{ github.event.pull_request.base.sha || format('origin/{0}', github.event.repository.default_branch) }}
-      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      BASE_REF: ${{ inputs.base }}
+      HEAD_SHA: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -74,6 +77,8 @@ jobs:
         id: base
         run: |
           mkdir -p "$RUNNER_TEMP/gate"
+          BASE_SHA="$(git rev-parse --verify --quiet "origin/$BASE_REF" || git rev-parse --verify "$BASE_REF")"
+          echo "Comparing $GITHUB_REF_NAME ($HEAD_SHA) against $BASE_REF ($BASE_SHA)" >> "$GITHUB_STEP_SUMMARY"
           git checkout --quiet "$BASE_SHA"
           if [ ! -f "$TASK" ]; then echo "skip=1" >> "$GITHUB_OUTPUT"; echo "Base has no $TASK yet: nothing to compare." >> "$GITHUB_STEP_SUMMARY"; exit 0; fi
           pnpm install --frozen-lockfile
@@ -96,11 +101,14 @@ jobs:
           cat "$RUNNER_TEMP/gate/comment.md" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Post or update the PR comment
-        if: steps.base.outputs.skip != '1' && github.event_name == 'pull_request'
+        if: steps.base.outputs.skip != '1'
         env:
           GH_TOKEN: ${{ github.token }}
-          PR: ${{ github.event.pull_request.number }}
+          PR_INPUT: ${{ inputs.pr }}
         run: |
+          PR="$PR_INPUT"
+          if [ -z "$PR" ]; then PR="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$GITHUB_REF_NAME" --state open --json number --jq '.[0].number // empty')"; fi
+          if [ -z "$PR" ]; then echo "No open PR for $GITHUB_REF_NAME: the comment is in this job's summary only." >> "$GITHUB_STEP_SUMMARY"; exit 0; fi
           marker="$(head -n 1 "$RUNNER_TEMP/gate/comment.md")"
           id="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -n 1)"
           if [ -n "$id" ]; then

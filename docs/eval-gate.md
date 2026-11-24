@@ -50,6 +50,14 @@ twopass gate noise --task gates/labelled.task.yaml noise-*.json
 recalibrate without calling a model) and `gates/<name>.thresholds.json`. `gate run` refuses to start without
 thresholds; there are no default ones.
 
+## Run it only by hand
+
+The template runs on every pull request that touches the paths you list. If that costs too much, make it manual:
+in `.github/workflows/eval-gate.yml`, replace the `pull_request:` trigger with `workflow_dispatch` inputs, as TwoPass's
+own workflow does (`base` to compare against, and optionally the `pr` to comment on). Then nothing runs on pull requests
+or merges. Start a run from the Actions tab with "Run workflow": pick the branch to test under "Use workflow from".
+GitHub shows that button only once the workflow file is on the default branch.
+
 ## The promise, in plain words
 
 The gate compares **base** (the PR's target branch) with **head** (the PR) on the same CI slice, in the same job.

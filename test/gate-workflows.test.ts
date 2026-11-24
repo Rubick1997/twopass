@@ -11,9 +11,14 @@ describe('workflow files', () => {
       const doc = parseDocument(text);
       expect(doc.errors.map((e) => e.message)).toEqual([]);
       const wf = doc.toJS() as { on: Record<string, unknown>; jobs: Record<string, { if?: string; steps: unknown[] }> };
-      expect(Object.keys(wf.on).sort()).toEqual(['pull_request', 'workflow_dispatch']);
       expect(text).not.toContain('pull_request_target:');
-      expect(wf.jobs.gate!.if).toContain('head.repo.full_name == github.repository');
+      if (name === 'repo') {
+        // TwoPass's own gate costs ≈ $1.40 a run: it runs only when someone starts it by hand.
+        expect(Object.keys(wf.on)).toEqual(['workflow_dispatch']);
+      } else {
+        expect(Object.keys(wf.on).sort()).toEqual(['pull_request', 'workflow_dispatch']);
+        expect(wf.jobs.gate!.if).toContain('head.repo.full_name == github.repository');
+      }
     });
   }
 });

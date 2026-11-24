@@ -377,6 +377,14 @@ the comment asked the reviewer to read, 4 were actually wrong. Eight runs of unc
 points (95.59–95.79%), and none of the 56 pairs of those runs was blocked. A CI run costs about $0.67 per side at list
 price and takes about 90 seconds. Details: [`bench/gate/`](bench/gate/).
 
+The red comment from that change, as CI posted it on a demo pull request:
+
+![Eval gate comment: promise broken, G1 and G2 would pass](docs-public/eval-gate-red-verdict.jpg)
+![Eval gate comment: recalibration proposal with the auto-accept cost](docs-public/eval-gate-red-proposal.jpg)
+
+TwoPass's own gate (`.github/workflows/eval-gate.yml`) runs **only when started by hand** from the Actions tab
+(≈ $1.40 a run). Readers' copies of the template run on pull requests unless they switch it the same way.
+
 **Routing.** `twopass gate` sends Claude models to Anthropic directly when `ANTHROPIC_API_KEY` is set and to OpenRouter
 otherwise (a task can force either), and reports every cost at list price from token usage. `twopass run` and
 `twopass bench` still route by the model ID as written, so the published part 1 numbers (Claude through OpenRouter)
