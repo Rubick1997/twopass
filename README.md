@@ -382,6 +382,10 @@ The red comment from that change, as CI posted it on a demo pull request:
 ![Eval gate comment: promise broken, G1 and G2 would pass](docs-public/eval-gate-red-verdict.jpg)
 ![Eval gate comment: recalibration proposal with the auto-accept cost](docs-public/eval-gate-red-proposal.jpg)
 
+With the proposed thresholds committed (a second demo pull request), the same check goes green:
+
+![Eval gate comment: promise kept after recalibration](docs-public/eval-gate-green.jpg)
+
 TwoPass's own gate (`.github/workflows/eval-gate.yml`) runs **only when started by hand** from the Actions tab
 (≈ $1.40 a run). Readers' copies of the template run on pull requests unless they switch it the same way.
 
