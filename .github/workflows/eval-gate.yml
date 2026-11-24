@@ -52,7 +52,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22.18'
-      - uses: actions/cache@v4
+      # Restore and save separately: actions/cache only saves after a successful job, and a red gate is a failed job.
+      - id: data-cache
+        uses: actions/cache/restore@v4
         with:
           path: data/banking77/train.csv
           key: banking77-train-v1
@@ -61,6 +63,12 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           node scripts/fetch-banking77.ts --train-only
+
+      - if: steps.data-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: data/banking77/train.csv
+          key: banking77-train-v1
 
       - name: Run base
         id: base
@@ -83,7 +91,7 @@ jobs:
         if: steps.base.outputs.skip != '1'
         run: |
           set +e
-          node src/cli.ts gate compare "$RUNNER_TEMP/gate/base.json" "$RUNNER_TEMP/gate/head.json" --task "$TASK" --comment "$RUNNER_TEMP/gate/comment.md"
+          node src/cli.ts gate compare "$RUNNER_TEMP/gate/base.json" "$RUNNER_TEMP/gate/head.json" --task "$TASK" --comment "$RUNNER_TEMP/gate/comment.md" --artifact eval-gate-results
           echo "status=$?" >> "$GITHUB_OUTPUT"
           cat "$RUNNER_TEMP/gate/comment.md" >> "$GITHUB_STEP_SUMMARY"
 

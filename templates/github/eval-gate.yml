@@ -75,7 +75,7 @@ jobs:
         if: steps.base.outputs.skip != '1'
         run: |
           set +e
-          twopass gate compare "$RUNNER_TEMP/gate/base.json" "$RUNNER_TEMP/gate/head.json" --task "$TASK" --comment "$RUNNER_TEMP/gate/comment.md"
+          twopass gate compare "$RUNNER_TEMP/gate/base.json" "$RUNNER_TEMP/gate/head.json" --task "$TASK" --comment "$RUNNER_TEMP/gate/comment.md" --artifact eval-gate-results
           echo "status=$?" >> "$GITHUB_OUTPUT"
           cat "$RUNNER_TEMP/gate/comment.md" >> "$GITHUB_STEP_SUMMARY"
 

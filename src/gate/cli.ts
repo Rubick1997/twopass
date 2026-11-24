@@ -22,7 +22,7 @@ export const GATE_USAGE = `twopass gate: a CI gate that enforces the precision p
       [--allow-threshold-mismatch]   experiments only: run on thresholds fitted for another checker (recorded, warned)
       runs the CI slice through the full pipeline (sync calls, list price) and writes a result file
   twopass gate noise --task <file> --runs <a.json> <b.json> …    unchanged-main spread → the task's noise file
-  twopass gate compare <base.json> <head.json> --task <file> [--gate g1|g2|g3|all] [--comment out.md] [--allow-mixed-routing]
+  twopass gate compare <base.json> <head.json> --task <file> [--gate g1|g2|g3|all] [--comment out.md] [--artifact <name>] [--allow-mixed-routing]
       offline; exits 1 when the enforced gate fails
   twopass gate recalibrate --task <file> --run <head.json> [--write]
       proposes thresholds that restore the promise; --write replaces the thresholds file (commit it as its own change)
@@ -58,6 +58,7 @@ export async function gateMain(argv: string[]): Promise<number> {
       gate: { type: 'string' },
       comment: { type: 'string' },
       'allow-mixed-routing': { type: 'boolean' },
+      artifact: { type: 'string' },
       run: { type: 'string' },
       write: { type: 'boolean' },
       'from-run': { type: 'string' },
@@ -168,6 +169,7 @@ export async function gateMain(argv: string[]): Promise<number> {
         ...(g && g !== 'all' ? { enforce: g as 'g1' | 'g2' | 'g3' } : {}),
         ...(values['allow-mixed-routing'] ? { allowMixedRouting: true } : {}),
         ...(values.comment ? { commentPath: values.comment } : {}),
+        ...(values.artifact ? { artifact: values.artifact } : {}),
       });
       for (const id of ['g1', 'g2', 'g3'] as const) {
         const o = r.gates[id];

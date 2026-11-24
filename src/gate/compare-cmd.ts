@@ -35,6 +35,8 @@ export function gateCompare(o: {
   enforce?: GateId;
   allowMixedRouting?: boolean;
   commentPath?: string;
+  /** CI: name of the artifact the result files are uploaded as. */
+  artifact?: string;
 }): CompareOutput {
   const { config } = loadGateConfig(o.taskPath);
   const base = readResult(o.basePath);
@@ -53,7 +55,7 @@ export function gateCompare(o: {
   const promiseFailed = !gates.g3.reasons.find((r) => r.check === 'promise')!.pass;
   const proposal = promiseFailed ? propose(config, o.taskPath, head) : undefined;
   const review = reviewRows(comparison);
-  const comment = renderComment({ comparison, gates, enforce, noise, proposal, review, base, head, taskPath: o.taskPath, headPath: o.headPath });
+  const comment = renderComment({ comparison, gates, enforce, noise, proposal, review, base, head, taskPath: o.taskPath, headPath: o.headPath, ...(o.artifact ? { artifact: o.artifact } : {}) });
   if (o.commentPath) writeFileSync(o.commentPath, comment);
   return { comparison, gates, enforce, pass: gates[enforce].pass, proposal, review, comment };
 }

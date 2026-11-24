@@ -183,3 +183,12 @@ in about a second, no id column needed. Awkward:
    calibration rows are too few for stable thresholds. The docs should say how many labelled rows to start with.
 3. The template's `npm install --global twopass@0.0.1` fails until TwoPass is on npm.
 Not followed: `calibrate --collect` and the noise runs (paid), and the GitHub side (push, secrets, PR) needs approval.
+
+## First CI run (draft PR #11: change 6 into ci-eval-gate, 24 Nov 2026)
+
+Red, as locally: 94.7% right (floor 94.8%), auto-accepted but wrong 65 → 82, accuracy 93.8% → 94.3%; G1 and G2 pass.
+The sticky comment carried the recalibration proposal and 10 reviewer rows. Cost: base $0.78 (Anthropic $0.15: the
+runner's first calls wrote the 1-hour cache), head $0.62, so $1.40 list price. Time: 7 minutes, of which the Banking77
+download took 4 and each gate run about 80 s. Fixed after this run: the data cache is now saved even when the gate
+fails (it wasn't, so every red run re-downloaded), and the comment's apply command names the `eval-gate-results`
+artifact instead of a path on the runner.

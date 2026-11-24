@@ -23,6 +23,8 @@ export interface CommentInput {
   head: GateResult;
   taskPath: string;
   headPath: string;
+  /** CI: the artifact that holds the result files; the apply command then names the file inside it. */
+  artifact?: string;
 }
 
 const ok = (b: boolean) => (b ? '✅' : '❌');
@@ -92,7 +94,7 @@ export function renderComment(i: CommentInput): string {
   );
 
   // Recalibration
-  if (i.proposal && !promiseReason.pass) out.push('', ...renderProposal(i.proposal, i.taskPath, i.headPath));
+  if (i.proposal && !promiseReason.pass) out.push('', ...renderProposal(i.proposal, i.taskPath, i.headPath, i.artifact));
 
   // Rows to read
   if (i.review.length) {
@@ -146,7 +148,7 @@ export function renderComment(i: CommentInput): string {
   return out.join('\n') + '\n';
 }
 
-export function renderProposal(p: RecalibrationProposal, taskPath: string, headPath: string): string[] {
+export function renderProposal(p: RecalibrationProposal, taskPath: string, headPath: string, artifact?: string): string[] {
   const out = ['### Recalibration proposal'];
   if (p.kind === 'needs-points') {
     out.push('', `Can't propose thresholds yet: ${p.reason}`, '', `\`${p.command}\``);
@@ -177,7 +179,15 @@ export function renderProposal(p: RecalibrationProposal, taskPath: string, headP
     out.push('', `⚠️ Only ${p.checkProposed.accepted} held-out rows were auto-accepted: treat the check as a sanity check, not evidence. More calibration rows make it meaningful.`);
   }
   if (p.restores) {
-    out.push('', 'To apply it, commit the new thresholds (that commit goes through this gate too):', '', `\`twopass gate recalibrate --task ${taskPath} --run ${headPath} --write\``);
+    const run = artifact ? (headPath.split('/').pop() ?? headPath) : headPath;
+    out.push(
+      '',
+      artifact
+        ? `To apply it, download the \`${artifact}\` artifact of this run, then commit the new thresholds (that commit goes through this gate too):`
+        : 'To apply it, commit the new thresholds (that commit goes through this gate too):',
+      '',
+      `\`twopass gate recalibrate --task ${taskPath} --run ${run} --write\``,
+    );
   }
   return out;
 }
