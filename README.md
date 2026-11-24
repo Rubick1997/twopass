@@ -71,6 +71,9 @@ only chooses which way each row goes.
 
 Requirements: Node ≥ 22.18, pnpm, and an [OpenRouter](https://openrouter.ai) API key with credit.
 
+To use the CLI on your own data (including `twopass gate`), install it from npm: `npm install --global twopass`.
+To run the benchmarks below, work from a clone:
+
 ```bash
 git clone https://github.com/Rubick1997/twopass.git && cd twopass
 pnpm install

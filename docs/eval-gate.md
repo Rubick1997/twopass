@@ -18,8 +18,8 @@ You need a labelled CSV (one text column and one label column; an id column is o
 [OpenRouter](https://openrouter.ai) key for the checker, and optionally an Anthropic key for Claude models.
 
 ```bash
-# 0. TwoPass is not on npm yet. Until it is, run it from a clone:
-git clone https://github.com/Rubick1997/twopass && cd twopass && pnpm install && pnpm build && npm link
+# 0. Install (Node >= 22.18)
+npm install --global twopass
 cd /path/to/your/repo
 
 # 1. Write the task config, calibration rows, CI slice and workflow (no API calls)
@@ -127,5 +127,3 @@ rows with the lowest checker confidence come first. Gold labels are not shown; y
 - Extraction tasks (several fields per row). The gate handles classification only.
 - Data that isn't a CSV.
 - CI systems other than GitHub Actions. The commands are plain CLI calls, so porting the workflow is straightforward.
-- An npm release. Until there is one, the template's `npm install --global twopass@<version>` line has to be replaced
-  with an install from a clone.
